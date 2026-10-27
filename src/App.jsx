@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { C, ST, ORDER, MODELS, EVENTS, INBOX, BLOCK_TYPES, seedPages, seedRows, seedRecent, seedPrivate } from './data.js';
 import { Icon, Logo } from './icons.jsx';
+import { useSync } from './sync.js';
 
 const KEY = 'marg:v1';
 const load = () => { try { return JSON.parse(localStorage.getItem(KEY)) || null; } catch { return null; } };
@@ -59,6 +60,8 @@ export default function App() {
   const [slash, setSlash] = useState(null);
   const [settings, setSettings] = useState(false);
   const tt = useRef(); const msgRef = useRef();
+  const sync = useSync(data, setData);
+  const [cred, setCred] = useState({ email: '', password: '', err: '' });
 
   useEffect(() => { try { localStorage.setItem(KEY, JSON.stringify(data)); } catch { /* full */ } }, [data]);
   useEffect(() => { if (msgRef.current) msgRef.current.scrollTop = msgRef.current.scrollHeight; }, [msgs, ai]);
@@ -73,7 +76,7 @@ export default function App() {
     setData(d => ({ ...d, recent: [id, ...d.recent.filter(x => x !== id)].slice(0, 12) }));
   };
   const back = () => { setScreen(prev || 'home'); setMenu(false); setSlash(null); };
-  const updPage = (id, f) => setData(d => ({ ...d, pages: { ...d.pages, [id]: f(d.pages[id]) } }));
+  const updPage = (id, f) => setData(d => ({ ...d, pages: { ...d.pages, [id]: { ...f(d.pages[id]), t: Date.now() } } }));
   const updBlock = (i, patch) => updPage(pageId, p => ({ ...p, blocks: p.blocks.map((b, j) => j === i ? { ...b, ...patch } : b) }));
   const insertBlock = (i, b) => { updPage(pageId, p => { const bl = [...p.blocks]; bl.splice(i, 0, b); return { ...p, blocks: bl }; }); setFocus(b.id); };
   const removeBlock = i => updPage(pageId, p => ({ ...p, blocks: p.blocks.filter((_, j) => j !== i) }));
@@ -111,7 +114,7 @@ export default function App() {
     const set = t => setMsgs(m => { const n = [...m]; n[n.length - 1] = { r: 'a', t }; return n; });
     try {
       const ctl = new AbortController(); const to = setTimeout(() => ctl.abort(), 4000);
-      const res = await fetch(data.server.replace(/\/$/, '') + '/api/ai', { method: 'POST', signal: ctl.signal, headers: { 'Content-Type': 'application/json' },
+      const res = await fetch(data.server.replace(/\/$/, '') + '/api/ai', { method: 'POST', signal: ctl.signal, headers: { 'Content-Type': 'application/json', ...sync.authHeader },
         body: JSON.stringify({ model: MODELS[model], prompt: qq, context: isPg ? { pageId, text: pageText(page) } : { workspace: true } }) });
       clearTimeout(to);
       if (!res.ok || !res.body) throw new Error();
@@ -287,7 +290,15 @@ export default function App() {
       <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 16 }}>Innstillinger</div>
       <div style={{ fontSize: 13.5, color: '#8f8e8a', marginBottom: 6 }}>Serveradresse</div>
       <input value={data.server} onChange={e => setData(d => ({ ...d, server: e.target.value }))} style={{ width: '100%', boxSizing: 'border-box', height: 42, borderRadius: 10, border: 0, background: '#2a2a2a', color: '#ebebe9', padding: '0 12px', font: 'inherit', fontFamily: 'ui-monospace,monospace', fontSize: 14 }} />
-      <div style={{ fontSize: 13, color: '#6f6e6a', margin: '8px 0 18px' }}>AI-forespørsler sendes til <code>/api/ai</code> på denne serveren (Ollama). Notater lagres lokalt på enheten.</div>
+      <div style={{ fontSize: 13, color: '#6f6e6a', margin: '8px 0 14px' }}>Notater lagres lokalt og synkes til serveren når du er logget inn. AI kjører i Ollama på serveren.</div>
+      {sync.auth.token ? <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18, fontSize: 14.5 }}>
+        <span>{sync.auth.email} · <span style={{ color: sync.status === 'synket' ? '#7fc495' : '#e3b665' }}>{sync.status}</span></span>
+        <button onClick={sync.logout} style={btn('#2a2a2a', '#ebebe9')}>Logg ut</button></div>
+      : <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 18 }}>
+        {['email', 'password'].map(k => <input key={k} type={k} placeholder={k === 'email' ? 'E-post' : 'Passord'} value={cred[k]} onChange={e => setCred(c => ({ ...c, [k]: e.target.value }))} style={{ height: 42, borderRadius: 10, border: 0, background: '#2a2a2a', color: '#ebebe9', padding: '0 12px', font: 'inherit', fontSize: 15 }} />)}
+        {cred.err && <div style={{ color: '#ec8c8c', fontSize: 13.5 }}>{cred.err}</div>}
+        <div style={{ display: 'flex', gap: 8 }}>{[['Logg inn', false], ['Opprett konto', true]].map(([l, reg]) => <button key={l} onClick={async () => { try { await sync.login(cred.email, cred.password, reg); setCred({ email: '', password: '', err: '' }); showToast('Koblet til ' + data.server.replace(/^https?:\/\//, '')); } catch (e) { setCred(c => ({ ...c, err: e.message === 'Failed to fetch' ? 'Fikk ikke kontakt med serveren' : e.message })); } }} style={btn(reg ? '#2a2a2a' : '#ebebe9', reg ? '#ebebe9' : '#191919')}>{l}</button>)}</div>
+      </div>}
       <div style={{ display: 'flex', gap: 10, justifyContent: 'space-between' }}>
         <button onClick={() => { if (confirm('Tilbakestille alle notater til eksempeldata?')) { setData(d => withIds({ ...d, pages: seedPages(), rows: seedRows(), recent: seedRecent, priv: seedPrivate })); setSettings(false); setScreen('home'); } }} style={btn('#2a2a2a', '#ec8c8c')}>Tilbakestill</button>
         <button onClick={() => setSettings(false)} style={btn('#ebebe9', '#191919')}>Ferdig</button>
@@ -308,7 +319,7 @@ export default function App() {
     const nav = (k, label, ic, f) => <div className="press" onClick={f || (() => { setScreen(k); setMenu(false); })} style={{ display: 'flex', alignItems: 'center', gap: 10, height: 32, padding: '0 12px', margin: '0 6px', borderRadius: 6, cursor: 'pointer', fontSize: 14.5, color: screen === k ? '#ebebe9' : '#bcbcb9', background: screen === k ? '#2a2a2a' : 'transparent' }}>{ic}{label}</div>;
     return <div style={{ position: 'fixed', inset: 0, display: 'flex', background: '#191919' }}>
       <aside style={{ width: 250, flex: 'none', background: '#202020', boxShadow: 'inset -1px 0 0 #262626', display: 'flex', flexDirection: 'column', paddingTop: 'max(14px, env(safe-area-inset-top))' }} className="drag">
-        <div className="nodrag" onClick={() => setSettings(true)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '20px 18px 14px', cursor: 'pointer' }}><Logo size={26} r={7} /><div><div style={{ fontWeight: 600, fontSize: 15 }}>Marg</div><div style={{ fontSize: 11.5, color: '#7fc495', fontFamily: 'ui-monospace,monospace' }}>● {data.server.replace(/^https?:\/\//, '')}</div></div></div>
+        <div className="nodrag" onClick={() => setSettings(true)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '20px 18px 14px', cursor: 'pointer' }}><Logo size={26} r={7} /><div><div style={{ fontWeight: 600, fontSize: 15 }}>Marg</div><div style={{ fontSize: 11.5, color: sync.status === 'synket' ? '#7fc495' : '#8f8e8a', fontFamily: 'ui-monospace,monospace' }}>● {data.server.replace(/^https?:\/\//, '')}</div></div></div>
         <div className="nodrag" style={{ flex: 1, overflow: 'auto' }}>
           {nav('search', 'Søk', <Icon.search size={17} />)}
           {nav('ai', 'Spør AI', <Icon.chat size={17} />, () => setAi(true))}

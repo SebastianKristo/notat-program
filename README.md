@@ -13,3 +13,19 @@ npm run dist:mac   # DMG (på macOS)
 ```
 
 GitHub Actions (`.github/workflows/release.yml`) bygger APK, IPA og DMG på hver push og publiserer dem som en GitHub-release.
+
+## Backend (Docker Compose)
+
+`server/` inneholder API (Node + Postgres/pgvector), Ollama for AI, Caddy for HTTPS og nattlig `pg_dump`-backup.
+
+```bash
+npm install && npm run build      # web-klienten serveres også av Caddy fra ../dist
+cd server
+cp .env.example .env              # sett DOMAIN og POSTGRES_PASSWORD
+docker compose up -d --build
+```
+
+- Pek DNS for `DOMAIN` mot serveren; Caddy henter TLS-sertifikat automatisk.
+- `ollama-pull` laster ned modellene i `OLLAMA_MODELS` ved oppstart.
+- Første bruker kan registrere seg fra appen (M-logoen → Opprett konto). Deretter er registrering stengt, med mindre `ALLOW_SIGNUP=true`.
+- Endepunkter: `/api/health`, `/api/register`, `/api/login`, `/api/logout`, `/api/workspace` (GET/PUT med versjonskontroll), `/api/history`, `/api/models`, `/api/ai` (strømmer fra Ollama).
