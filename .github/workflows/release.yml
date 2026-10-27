@@ -36,11 +36,11 @@ jobs:
         with: { node-version: 22, cache: npm }
       - run: npm ci
       - run: npm run build
-      - run: npx cap add ios --packagemanager SPM && npx cap sync ios
+      - run: npx cap add ios && npx cap sync ios
       - name: Build unsigned IPA (iPhone + iPad)
         run: |
           /usr/libexec/PlistBuddy -c "Set :UIRequiresFullScreen false" ios/App/App/Info.plist || true
-          xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Release \
+          xcodebuild -workspace ios/App/App.xcworkspace -scheme App -configuration Release \
             -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
             TARGETED_DEVICE_FAMILY="1,2" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
           mkdir -p Payload out
