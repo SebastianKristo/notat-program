@@ -1,0 +1,10 @@
+html, body, #root { margin: 0; height: 100%; background: #191919; }
+body { color: #ebebe9; font-family: -apple-system, 'SF Pro Text', 'IBM Plex Sans', system-ui, 'Segoe UI', Roboto, sans-serif; -webkit-font-smoothing: antialiased; overscroll-behavior: none; -webkit-tap-highlight-color: transparent; }
+* { scrollbar-width: none; }
+*::-webkit-scrollbar { display: none; }
+.press:active, .press:hover { background: #232323 !important; }
+.editable:empty::before { content: attr(data-ph); color: #5f5e5a; pointer-events: none; }
+.editable { word-break: break-word; white-space: pre-wrap; -webkit-user-select: text; user-select: text; }
+.drag { -webkit-app-region: drag; }
+.nodrag, .drag span, .drag div[class~="nodrag"] { -webkit-app-region: no-drag; }
+input, button { -webkit-app-region: no-drag; }

@@ -1,0 +1,7 @@
+{
+  "appId": "no.kristo.marg",
+  "appName": "Marg",
+  "webDir": "dist",
+  "backgroundColor": "#191919",
+  "ios": { "contentInset": "never" }
+}
