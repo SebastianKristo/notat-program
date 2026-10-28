@@ -1,9 +1,38 @@
-html, body, #root { margin: 0; height: 100%; background: #191919; }
-body { color: #ebebe9; font-family: -apple-system, 'SF Pro Text', 'IBM Plex Sans', system-ui, 'Segoe UI', Roboto, sans-serif; -webkit-font-smoothing: antialiased; overscroll-behavior: none; -webkit-tap-highlight-color: transparent; }
+:root {
+  --bg:#191919; --s0:#1f1f1f; --s1:#202020; --s2:#252525; --s3:#2a2a2a; --s4:#2f2f2f; --s5:#333; --s6:#3a3a3a; --s7:#444; --press:#232323;
+  --line:#262626; --line2:#2c2c2c;
+  --text:#ebebe9; --text2:#dcdcda; --text3:#bcbcb9; --muted:#8f8e8a; --muted2:#9b9a97; --faint:#6f6e6a;
+  --glass:rgba(48,48,48,.82); --menu:rgba(44,44,44,.97);
+  --red-bg:#4d2626; --red-fg:#ec8c8c; --green-bg:#24412e; --green-fg:#7fc495; --blue-bg:#1f3a5a; --blue-fg:#86b6ec;
+  --yellow-bg:#4a3b1c; --yellow-fg:#e3b665; --gray-bg:#373737; --gray-fg:#d3d3d1; --purple-bg:#3a2d52; --purple-fg:#b99be8;
+  color-scheme: dark;
+}
+:root[data-theme="light"] {
+  --bg:#ffffff; --s0:#f4f4f2; --s1:#f7f7f5; --s2:#f1f1ef; --s3:#efefed; --s4:#e9e9e7; --s5:#e3e3e0; --s6:#dddcd8; --s7:#d0cfcb; --press:#f1f1ef;
+  --line:#ececea; --line2:#e6e5e1;
+  --text:#2b2a27; --text2:#37352f; --text3:#55524b; --muted:#7d7a73; --muted2:#9b988f; --faint:#a5a29a;
+  --glass:rgba(250,250,248,.86); --menu:rgba(255,255,255,.98);
+  --red-bg:#fbe4e4; --red-fg:#b33a3a; --green-bg:#dbeddb; --green-fg:#2b5e36; --blue-bg:#d3e5ef; --blue-fg:#28456c;
+  --yellow-bg:#fbeecc; --yellow-fg:#7a5a12; --gray-bg:#ececea; --gray-fg:#55524b; --purple-bg:#e8deee; --purple-fg:#5a3a7a;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: light) { :root[data-theme="system"] {
+  --bg:#ffffff; --s0:#f4f4f2; --s1:#f7f7f5; --s2:#f1f1ef; --s3:#efefed; --s4:#e9e9e7; --s5:#e3e3e0; --s6:#dddcd8; --s7:#d0cfcb; --press:#f1f1ef;
+  --line:#ececea; --line2:#e6e5e1;
+  --text:#2b2a27; --text2:#37352f; --text3:#55524b; --muted:#7d7a73; --muted2:#9b988f; --faint:#a5a29a;
+  --glass:rgba(250,250,248,.86); --menu:rgba(255,255,255,.98);
+  --red-bg:#fbe4e4; --red-fg:#b33a3a; --green-bg:#dbeddb; --green-fg:#2b5e36; --blue-bg:#d3e5ef; --blue-fg:#28456c;
+  --yellow-bg:#fbeecc; --yellow-fg:#7a5a12; --gray-bg:#ececea; --gray-fg:#55524b; --purple-bg:#e8deee; --purple-fg:#5a3a7a;
+  color-scheme: light;
+} }
+:root[data-contrast="high"] { --muted: var(--text3); --muted2: var(--text3); --faint: var(--muted); --line: var(--s7); --line2: var(--s7); }
+#root { zoom: var(--zoom, 1); }
+html, body, #root { margin: 0; height: 100%; background: var(--bg); }
+body { color: var(--text); font-family: -apple-system, 'SF Pro Text', 'IBM Plex Sans', system-ui, 'Segoe UI', Roboto, sans-serif; -webkit-font-smoothing: antialiased; overscroll-behavior: none; -webkit-tap-highlight-color: transparent; }
 * { scrollbar-width: none; }
 *::-webkit-scrollbar { display: none; }
-.press:active, .press:hover { background: #232323 !important; }
-.editable:empty::before { content: attr(data-ph); color: #5f5e5a; pointer-events: none; }
+.press:active, .press:hover { background: var(--press) !important; }
+.editable:empty::before { content: attr(data-ph); color: var(--faint); pointer-events: none; }
 .editable { word-break: break-word; white-space: pre-wrap; -webkit-user-select: text; user-select: text; }
 .drag { -webkit-app-region: drag; }
 .nodrag, .drag span, .drag div[class~="nodrag"] { -webkit-app-region: no-drag; }
@@ -11,4 +40,11 @@ input, button { -webkit-app-region: no-drag; }
 .tree-row .hover-show { visibility: hidden; }
 .tree-row:hover .hover-show { visibility: visible; }
 @media (hover: none) { .tree-row .hover-show { visibility: visible; } }
-select { color-scheme: dark; }
+.head-actions { opacity: 0; transition: opacity 120ms; }
+.page-head:hover .head-actions { opacity: 1; }
+@media (hover: none) { .head-actions { opacity: 1; } }
+.cover-actions { opacity: 0; transition: opacity 120ms; }
+div:hover > .cover-actions { opacity: 1; }
+.peek h2 { font-size: 20px; margin: 18px 0 6px; } .peek .callout { background: var(--s2); border-radius: 8px; padding: 12px 14px; margin: 8px 0; }
+.peek .math { background: var(--s1); border-radius: 8px; padding: 12px; text-align: center; font: italic 19px Georgia, serif; } .peek blockquote { border-left: 3px solid var(--text); margin: 8px 0; padding-left: 12px; } .peek img { max-width: 100%; border-radius: 8px; }
+@media print { body { background: #fff; } }

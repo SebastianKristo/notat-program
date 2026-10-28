@@ -70,16 +70,17 @@ const routes = {
   'GET /api/health': async (req, res) => {
     let ollama = false; try { ollama = (await fetch(ollama() + '/api/tags', { signal: AbortSignal.timeout(2000) })).ok; } catch {}
     const users = (await db.query('SELECT count(*)::int n FROM users')).rows[0].n;
-    send(res, 200, { ok: true, ollama, signup: ALLOW_SIGNUP || users === 0 });
+    send(res, 200, { ok: true, ollama, signup: ALLOW_SIGNUP || users === 0 || settings.allow_guests === 'true', name: settings.workspace_name });
   },
 
   'POST /api/register': async (req, res) => {
     const { email, password } = await readJson(req);
     if (!email || !password || password.length < 8) return send(res, 400, { error: 'E-post og passord (minst 8 tegn) kreves' });
     const users = (await db.query('SELECT count(*)::int n FROM users')).rows[0].n;
-    if (!ALLOW_SIGNUP && users > 0) return send(res, 403, { error: 'Registrering er stengt' });
+    const guest = users > 0 && !ALLOW_SIGNUP && settings.allow_guests === 'true';
+    if (!ALLOW_SIGNUP && users > 0 && !guest) return send(res, 403, { error: 'Registrering er stengt' });
     try {
-      const u = await db.query('INSERT INTO users(email, pw_hash) VALUES ($1,$2) RETURNING id', [email.toLowerCase().trim(), hash(password)]);
+      const u = await db.query('INSERT INTO users(email, pw_hash, role) VALUES ($1,$2,$3) RETURNING id', [email.toLowerCase().trim(), hash(password), guest ? 'guest' : 'member']);
       const token = crypto.randomBytes(32).toString('hex');
       await db.query('INSERT INTO sessions(token, user_id, user_agent) VALUES ($1,$2,$3)', [token, u.rows[0].id, String(req.headers['user-agent'] || '').slice(0, 200)]);
       audit(u.rows[0].id, 'register', email);

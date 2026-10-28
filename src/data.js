@@ -1,5 +1,5 @@
 const P = (bg, fg) => ({ bg, fg });
-export const C = { gray: P('#373737', '#d3d3d1'), blue: P('#1f3a5a', '#86b6ec'), green: P('#24412e', '#7fc495'), yellow: P('#4a3b1c', '#e3b665'), red: P('#4d2626', '#ec8c8c'), purple: P('#3a2d52', '#b99be8') };
+export const C = { gray: P('var(--gray-bg)', 'var(--gray-fg)'), blue: P('var(--blue-bg)', 'var(--blue-fg)'), green: P('var(--green-bg)', 'var(--green-fg)'), yellow: P('var(--yellow-bg)', 'var(--yellow-fg)'), red: P('var(--red-bg)', 'var(--red-fg)'), purple: P('var(--purple-bg)', 'var(--purple-fg)') };
 export const ST = { 'Ikke startet': C.gray, 'Pågår': C.blue, 'Ferdig': C.green };
 export const ORDER = ['Ikke startet', 'Pågår', 'Ferdig'];
 export const MODELS = ['llama3.1:8b', 'qwen2.5:14b', 'mistral:7b'];
@@ -18,28 +18,36 @@ export const seedPages = () => ({
   mote: { icon: 'doc', title: 'Møtenotater 27. okt.', props: [{ k: 'Type', v: 'AI-møtenotat', c: 'yellow' }], blocks: [{ type: 'callout', icon: '🎙️', text: 'Transkribert med whisper på serveren · 18 min' }, { type: 'h', text: 'Sammendrag' }, { type: 'p', text: 'Gruppen deler Øving 7: Kristo tar oppgave 1–2, Sara tar 3–4. Vi møtes torsdag for å gå gjennom.' }, { type: 'h', text: 'Gjøremål' }, { type: 'todo', text: 'Kristo: oppgave 1–2', done: false }, { type: 'todo', text: 'Sara: oppgave 3–4', done: false }] }
 });
 
+const MON = { 'jan.': 1, 'feb.': 2, 'mars': 3, 'apr.': 4, 'mai': 5, 'juni': 6, 'juli': 7, 'aug.': 8, 'sep.': 9, 'okt.': 10, 'nov.': 11, 'des.': 12 };
+export const toIso = s => { const m = String(s).match(/(\d+)\.\s*(\S+)/); return m && MON[m[2]] ? `2026-${String(MON[m[2]]).padStart(2, '0')}-${m[1].padStart(2, '0')}` : ''; };
+export const fmtDay = iso => iso ? new Date(iso + 'T12:00').toLocaleDateString('nb-NO', { day: 'numeric', month: 'short' }) : '–';
+export const EMNER = ['DATA1200', 'ELEK1100', 'MATA1100'];
+export const seedAutomations = () => [
+  { id: 'a1', on: true, when: 'Ferdig', action: 'notify', label: 'Når Status blir Ferdig → varsle i innboksen' },
+  { id: 'a2', on: false, when: 'Pågår', action: 'today', label: 'Når Status blir Pågår → sett dato til i dag' }
+];
 export const seedRows = () => [
   ['🧮', 'Boolsk algebra – eksamen 2024', 'DATA1200', 'Ferdig', '20. okt.'], ['🗺️', 'Karnaugh 4 variabler', 'DATA1200', 'Pågår', '28. okt.'],
   ['⚡', 'Thevenin og Norton', 'ELEK1100', 'Pågår', '30. okt.'], ['🔁', 'Vipper og tellere', 'DATA1200', 'Ikke startet', '4. nov.'],
   ['📈', 'Integrasjon ved delbrøk', 'MATA1100', 'Ikke startet', '6. nov.'], ['⚡', 'RC-kretser og tidskonstant', 'ELEK1100', 'Ikke startet', '11. nov.']
-].map(([icon, n, emne, st, dato], i) => ({ id: i, icon, n, emne, st, dato }));
+].map(([icon, n, emne, st, dato], i) => ({ id: i, icon, n, emne, st, d: toIso(dato) }));
 
 export const seedRecent = ['oslomet', 'oving7', 'kretser', 'karnaugh', 'eksamen', 'minterm'];
 export const seedPrivate = ['velkommen', 'todo', 'mote'];
 
 export const EVENTS = {
-  26: [['10:15', 'Forelesning DATA1200', 'Auditorium P35', '#b99be8', 'karnaugh']],
-  27: [['09:00', 'Lab ELEK1100', 'Rom PH 230', '#e3b665', 'kretser'], ['14:00', 'Gruppemøte Øving 7', 'Møtenotat tatt opp', '#7fc495', 'mote'], ['18:00', 'Repetere Karnaugh', 'Fra Eksamensøving', '#86b6ec', 'karnaugh']],
-  28: [['12:15', 'Forelesning MATA1100', 'Auditorium P46', '#ec8c8c', 'oslomet']],
-  29: [['23:59', 'Frist Øving 7', 'Canvas', '#ec8c8c', 'oving7']],
-  30: [['10:00', 'Thevenin og Norton', 'Eksamensøving', '#e3b665', 'eksamen']]
+  26: [['10:15', 'Forelesning DATA1200', 'Auditorium P35', 'var(--purple-fg)', 'karnaugh']],
+  27: [['09:00', 'Lab ELEK1100', 'Rom PH 230', 'var(--yellow-fg)', 'kretser'], ['14:00', 'Gruppemøte Øving 7', 'Møtenotat tatt opp', 'var(--green-fg)', 'mote'], ['18:00', 'Repetere Karnaugh', 'Fra Eksamensøving', 'var(--blue-fg)', 'karnaugh']],
+  28: [['12:15', 'Forelesning MATA1100', 'Auditorium P46', 'var(--red-fg)', 'oslomet']],
+  29: [['23:59', 'Frist Øving 7', 'Canvas', 'var(--red-fg)', 'oving7']],
+  30: [['10:00', 'Thevenin og Norton', 'Eksamensøving', 'var(--yellow-fg)', 'eksamen']]
 };
 
 export const INBOX = [
   { a: 'S', c: '#7a5cc7', who: 'Sara', t: 'kommenterte: «Sjekk oppgave 2b, tror fortegnet er feil»', page: 'Øving 7', when: '12 min', unread: true, id: 'oving7' },
-  { a: '⚡', c: '#3a3a3a', who: 'Automatisering', t: 'flyttet «Karnaugh 4 variabler» til Pågår', page: 'Eksamensøving', when: '1 t', unread: true, id: 'eksamen' },
-  { a: 'M', c: '#3a3a3a', who: 'Marg AI', t: 'lagde sammendrag av møtet ditt', page: 'Møtenotater 27. okt.', when: '3 t', unread: true, id: 'mote' },
-  { a: '⏰', c: '#3a3a3a', who: 'Påminnelse', t: 'Frist Øving 7 om 2 dager', page: 'Øving 7', when: 'i går', unread: false, id: 'oving7' },
+  { a: '⚡', c: 'var(--s6)', who: 'Automatisering', t: 'flyttet «Karnaugh 4 variabler» til Pågår', page: 'Eksamensøving', when: '1 t', unread: true, id: 'eksamen' },
+  { a: 'M', c: 'var(--s6)', who: 'Marg AI', t: 'lagde sammendrag av møtet ditt', page: 'Møtenotater 27. okt.', when: '3 t', unread: true, id: 'mote' },
+  { a: '⏰', c: 'var(--s6)', who: 'Påminnelse', t: 'Frist Øving 7 om 2 dager', page: 'Øving 7', when: 'i går', unread: false, id: 'oving7' },
   { a: 'S', c: '#7a5cc7', who: 'Sara', t: 'nevnte deg i «Elektriske kretser»', page: 'Elektriske kretser', when: 'man.', unread: false, id: 'kretser' }
 ];
 
@@ -48,5 +56,6 @@ export const BLOCK_TYPES = [
   ['p', 'Tekst', 'Aa', 'Foreslått', 'avsnitt tekst'], ['todo', 'Gjøremål', '☐', 'Foreslått', 'oppgave sjekkliste'], ['h', 'Overskrift', 'H', 'Foreslått', 'tittel heading'],
   ['li', 'Punktliste', '•', 'Standardblokker', 'liste kulepunkt'], ['toggle', 'Utvidbar liste', '▸', 'Standardblokker', 'toggle skjul'],
   ['quote', 'Sitat', '“', 'Standardblokker', 'quote'], ['callout', 'Callout', '💡', 'Standardblokker', 'merknad boks'], ['divider', 'Skillelinje', '—', 'Standardblokker', 'linje hr'],
+  ['image', 'Bilde', '🖼️', 'Media', 'bilde foto opplasting'],
   ['math', 'Formel', '∑', 'Avanserte blokker', 'matte ligning latex'], ['ai', 'Spør AI', '✦', 'Avanserte blokker', 'ai assistent']
 ];

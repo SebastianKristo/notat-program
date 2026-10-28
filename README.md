@@ -30,6 +30,13 @@ Alt annet gjøres i appen under **Innstillinger** (profilknappen / ⚙️). Før
 - **Sikkerhetskopi:** til en SMB-deling (NAS) med test, tidsplan, lagringstid, AES-256-kryptering, manuell backup og gjenoppretting.
 - **Serverapplikasjon:** viser versjon og nye endringer, og «Oppdater server» henter siste kode og bygger tjenestene på nytt.
 - **Revisjonslogg:** innlogginger, AI-bruk, backup og endringer i innstillinger.
+- **Personer og sikkerhet:** medlemmer og gjester, tofaktor (TOTP), bytte passord, aktive enheter.
+- **Publisering:** sider på `/p/<adresse>` med passord, utløp, indeksering og visningstall.
+- **Møtenotater:** opptak → whisper (`docker compose --profile whisper up -d`) → AI-sammendrag, beslutninger og gjøremål.
+- **Marg MCP:** API-nøkler og MCP-endepunkt på `/api/mcp` for Claude og andre klienter.
+- **Tilkoblinger:** webhooks med HMAC-signatur når sider endres.
+- **E-post og kalender:** ICS-abonnement som vises i Kalender.
+- **Import/eksport:** Notion-ZIP, Obsidian-hvelv, Markdown og JSON inn; Markdown-ZIP, JSON og PDF ut.
 
 Vil du heller kjøre Ollama i Docker: `docker compose --profile ollama up -d` og bruk `http://ollama:11434` i innstillingene.
 
