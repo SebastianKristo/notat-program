@@ -23,6 +23,9 @@ services:
       OLLAMA_DEFAULT_MODEL: ${OLLAMA_DEFAULT_MODEL:-}
       ALLOW_SIGNUP: ${ALLOW_SIGNUP:-false}
       MARG_SECRET: ${MARG_SECRET:?sett MARG_SECRET i .env}
+      FILES_DIR: /data/files
+    volumes:
+      - files_data:/data/files
     depends_on: [db]
 
   # Lar «Oppdater server» i appen hente ny kode og bygge tjenestene på nytt.
@@ -72,9 +75,25 @@ services:
     environment:
       DATABASE_URL: postgres://marg:${POSTGRES_PASSWORD}@db:5432/marg
       MARG_SECRET: ${MARG_SECRET}
+      FILES_DIR: /data/files
+    volumes:
+      - files_data:/data/files
     depends_on: [db]
 
+  # Valgfri transkribering for møtenotater: docker compose --profile whisper up -d
+  # og bruk http://whisper:9000 under Innstillinger → Møtenotater.
+  whisper:
+    image: onerahmet/openai-whisper-asr-webservice:latest
+    profiles: [whisper]
+    restart: unless-stopped
+    environment:
+      ASR_MODEL: ${WHISPER_MODEL:-small}
+      ASR_ENGINE: faster_whisper
+    volumes: [whisper_cache:/root/.cache]
+
 volumes:
+  whisper_cache:
+  files_data:
   db_data:
   ollama_data:
   caddy_data:

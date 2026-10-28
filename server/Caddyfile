@@ -1,5 +1,8 @@
 {$DOMAIN} {
 	encode gzip
+	handle /p/* {
+		reverse_proxy api:3000
+	}
 	handle /api/* {
 		reverse_proxy api:3000 {
 			flush_interval -1

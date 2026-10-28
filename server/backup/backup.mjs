@@ -10,6 +10,7 @@ import pg from 'pg';
 import { encrypt, decrypt } from '../secret.js';
 
 const DB_URL = process.env.DATABASE_URL;
+const FILES = process.env.FILES_DIR || '/data/files';
 const db = new pg.Pool({ connectionString: DB_URL });
 const SECRET = new Set(['smb_pass', 'bk_key']);
 const NAME = /^marg-(\d{8})-(\d{6})(-manuell)?\.marg-backup$/;
@@ -61,10 +62,13 @@ async function backup(manual) {
   try {
     job.step = 'Eksporterer database'; job.pct = 10;
     await sh('pg_dump', ['-Fc', '-f', path.join(work, 'db.dump'), DB_URL]);
+    // Sidene som JSON i tillegg, så enkeltsider kan hentes ut uten full gjenoppretting
+    fs.writeFileSync(path.join(work, 'workspaces.json'), await sh('psql', ['-At', DB_URL, '-c', "SELECT coalesce(json_agg(json_build_object('email', u.email, 'data', w.data)), '[]') FROM workspaces w JOIN users u ON u.id = w.user_id"]));
+    fs.mkdirSync(FILES, { recursive: true });
     fs.writeFileSync(path.join(work, 'manifest.json'), JSON.stringify({ app: 'marg', format: 1, created: new Date().toISOString(), manual, encrypted: c.bk_encrypt === 'true' }, null, 2));
     job.step = 'Pakker'; job.pct = 40;
     let file = path.join(work, name);
-    await sh('tar', ['--zstd', '-cf', file, '-C', work, 'db.dump', 'manifest.json']);
+    await sh('tar', ['--zstd', '-cf', file, '-C', work, 'db.dump', 'manifest.json', 'workspaces.json', `--transform=s,^${path.basename(FILES)},files,`, '-C', path.dirname(FILES), path.basename(FILES)]);
     if (c.bk_encrypt === 'true') {
       let key = c.bk_key;
       if (!key) {
@@ -86,29 +90,45 @@ async function backup(manual) {
   } finally { fs.rmSync(work, { recursive: true, force: true }); }
 }
 
-async function restore(name) {
-  if (!NAME.test(name)) throw new Error('Ugyldig filnavn');
-  const c = await cfg();
-  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'marg-rs-'));
+// Henter (eller tar imot) en kopi, dekrypterer og pakker ut. Returnerer arbeidsmappen.
+async function unpack(c, { name, buffer }) {
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'marg-rs-')), file = path.join(work, 'kopi.marg-backup');
+  if (buffer) fs.writeFileSync(file, buffer);
+  else { if (!NAME.test(name)) throw new Error('Ugyldig filnavn'); job.step = 'Laster ned ' + name; job.pct = 15; await smb(c, `${cd(c)}get ${name} ${file}`); }
+  if (fs.readFileSync(file).subarray(0, 8).toString('latin1').startsWith('Salted__')) {
+    if (!c.bk_key) throw new Error('Kopien er kryptert, men nøkkelen mangler');
+    job.step = 'Dekrypterer'; job.pct = 35;
+    await sh('openssl', ['enc', '-d', '-aes-256-cbc', '-pbkdf2', '-in', file, '-out', file + '.tar', '-pass', 'env:BKKEY'], { env: { BKKEY: c.bk_key } })
+      .catch(() => { throw new Error('Kunne ikke dekryptere – feil nøkkel?'); });
+    fs.renameSync(file + '.tar', file);
+  }
+  job.step = 'Pakker ut'; job.pct = 50;
+  await sh('tar', ['--zstd', '-xf', file, '-C', work]);
+  if (!fs.existsSync(path.join(work, 'db.dump'))) throw new Error('Filen er ikke en Marg-sikkerhetskopi');
+  return work;
+}
+
+async function restore(src) {
+  const c = await cfg(), work = await unpack(c, src);
   try {
-    job.step = 'Laster ned ' + name; job.pct = 15;
-    const file = path.join(work, name);
-    await smb(c, `${cd(c)}get ${name} ${file}`);
-    const head = fs.readFileSync(file).subarray(0, 8).toString('latin1');
-    if (head.startsWith('Salted__')) {
-      if (!c.bk_key) throw new Error('Kopien er kryptert, men nøkkelen mangler');
-      job.step = 'Dekrypterer'; job.pct = 35;
-      await sh('openssl', ['enc', '-d', '-aes-256-cbc', '-pbkdf2', '-in', file, '-out', file + '.tar', '-pass', 'env:BKKEY'], { env: { BKKEY: c.bk_key } });
-      fs.renameSync(file + '.tar', file);
-    }
-    job.step = 'Pakker ut'; job.pct = 50;
-    await sh('tar', ['--zstd', '-xf', file, '-C', work]);
     job.step = 'Gjenoppretter database'; job.pct = 70;
     await sh('pg_restore', ['--clean', '--if-exists', '--no-owner', '-d', DB_URL, path.join(work, 'db.dump')]);
+    if (fs.existsSync(path.join(work, 'files'))) { job.step = 'Gjenoppretter filer'; job.pct = 85; fs.cpSync(path.join(work, 'files'), FILES, { recursive: true }); }
     // Behold SMB-oppsettet og nøkkelen som gjorde gjenopprettingen mulig
     for (const [k, v] of Object.entries(c)) if (/^(smb_|bk_)/.test(k) && v) await db.query('INSERT INTO settings(key, value) VALUES ($1,$2) ON CONFLICT (key) DO UPDATE SET value=$2', [k, SECRET.has(k) ? encrypt(v) : v]);
-    await db.query("INSERT INTO audit_log(action, detail) VALUES ('restore', $1)", [name]).catch(() => {});
+    await db.query("INSERT INTO audit_log(action, detail) VALUES ('restore', $1)", [src.name || 'opplastet fil']).catch(() => {});
   } finally { fs.rmSync(work, { recursive: true, force: true }); }
+}
+
+// Sidene i en kopi for én bruker (for å gjenopprette enkeltsider)
+async function pagesIn(name, email) {
+  const c = await cfg(), work = await unpack(c, { name });
+  try {
+    const f = path.join(work, 'workspaces.json');
+    if (!fs.existsSync(f)) throw new Error('Denne kopien er for gammel til å hente enkeltsider fra');
+    const ws = JSON.parse(fs.readFileSync(f, 'utf8') || '[]').find(w => w.email === email);
+    return Object.entries(ws?.data?.pages || {}).map(([id, p]) => ({ id, page: p }));
+  } finally { fs.rmSync(work, { recursive: true, force: true }); job.step = ''; job.pct = null; }
 }
 
 function start(kind, fn) {
@@ -139,7 +159,13 @@ http.createServer(async (req, res) => {
     if (req.url === '/list') return send(res, 200, await list(await cfg()));
     if (req.url === '/test' && req.method === 'POST') return send(res, 200, await test());
     if (req.url === '/run' && req.method === 'POST') return start('backup', () => backup(true)) ? send(res, 202, { started: true }) : send(res, 409, { error: 'En jobb pågår allerede' });
-    if (req.url === '/restore' && req.method === 'POST') { const { name } = await body(req); return start('restore', () => restore(name)) ? send(res, 202, { started: true }) : send(res, 409, { error: 'En jobb pågår allerede' }); }
+    if (req.url === '/restore' && req.method === 'POST') { const { name } = await body(req); return start('restore', () => restore({ name })) ? send(res, 202, { started: true }) : send(res, 409, { error: 'En jobb pågår allerede' }); }
+    if (req.url === '/restore-upload' && req.method === 'POST') {
+      if (job.running) return send(res, 409, { error: 'En jobb pågår allerede' });
+      const chunks = []; for await (const ch of req) chunks.push(ch);
+      return start('restore', () => restore({ buffer: Buffer.concat(chunks) })) ? send(res, 202, { started: true }) : send(res, 409, { error: 'En jobb pågår allerede' });
+    }
+    if (req.url === '/pages' && req.method === 'POST') { const { name, email } = await body(req); return send(res, 200, await pagesIn(name, email)); }
     send(res, 404, {});
   } catch (e) { send(res, 200, { ok: false, error: e.message }); }
 }).listen(8090, () => console.log('Marg backup på :8090'));

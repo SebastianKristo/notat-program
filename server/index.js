@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import pg from 'pg';
 import { encrypt, decrypt } from './secret.js';
 import { createAI } from './ai.js';
+import { createFeatures, checkTotp } from './features.js';
 
 const PORT = +process.env.PORT || 3000;
 const UPDATER = process.env.UPDATER_URL || 'http://updater:8080';
@@ -16,7 +17,8 @@ const settings = {
   default_model: process.env.OLLAMA_DEFAULT_MODEL ? 'ollama:' + process.env.OLLAMA_DEFAULT_MODEL : '',
   fallback: 'ollama', private_local: 'true',
   smb_host: '', smb_path: 'marg', smb_user: '', smb_pass: '', smb_domain: 'WORKGROUP', smb_version: 'SMB3',
-  bk_schedule: 'nightly', bk_keep: '30', bk_encrypt: 'true', bk_key: ''
+  bk_schedule: 'nightly', bk_keep: '30', bk_encrypt: 'true', bk_key: '',
+  whisper_url: process.env.WHISPER_URL || '', whisper_lang: 'no', ical_urls: '', workspace_name: 'Marg', allow_guests: 'false'
 };
 const SECRET = new Set(['gemini_key', 'claude_key', 'smb_pass', 'bk_key']);
 async function loadSettings() {
@@ -34,6 +36,7 @@ const ALLOW_SIGNUP = process.env.ALLOW_SIGNUP === 'true';
 const HISTORY_EVERY_MS = 5 * 60 * 1000;
 const db = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 const ai = createAI({ db, settings });
+let features;
 
 async function migrate() {
   for (let i = 0; ; i++) {
@@ -46,17 +49,21 @@ const hash = pw => { const salt = crypto.randomBytes(16).toString('hex'); return
 const verify = (pw, h) => { const [salt, k] = h.split(':'); const a = Buffer.from(k, 'hex'), b = crypto.scryptSync(pw, salt, 64); return a.length === b.length && crypto.timingSafeEqual(a, b); };
 const audit = (uid, action, detail) => db.query('INSERT INTO audit_log(user_id, action, detail) VALUES ($1,$2,$3)', [uid, action, detail]).catch(() => {});
 
-const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type, Authorization', 'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS' };
+const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Filename', 'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS' };
 const send = (res, code, body) => { res.writeHead(code, { ...cors, 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)); };
 const readJson = req => new Promise((ok, fail) => {
   let s = ''; req.on('data', c => { s += c; if (s.length > 20e6) { fail(new Error('too large')); req.destroy(); } });
   req.on('end', () => { try { ok(s ? JSON.parse(s) : {}); } catch (e) { fail(e); } });
 });
+const seen = new Map();
 async function auth(req) {
   const t = (req.headers.authorization || '').replace(/^Bearer /, '');
   if (!t) return null;
+  if (t.startsWith('marg_')) return features.tokenAuth(req);
   const r = await db.query('SELECT user_id FROM sessions WHERE token=$1', [t]);
-  return r.rows[0]?.user_id ?? null;
+  const uid = r.rows[0]?.user_id ?? null;
+  if (uid && Date.now() - (seen.get(t) || 0) > 60000) { seen.set(t, Date.now()); db.query('UPDATE sessions SET last_seen=now() WHERE token=$1', [t]).catch(() => {}); }
+  return uid;
 }
 
 const routes = {
@@ -74,18 +81,22 @@ const routes = {
     try {
       const u = await db.query('INSERT INTO users(email, pw_hash) VALUES ($1,$2) RETURNING id', [email.toLowerCase().trim(), hash(password)]);
       const token = crypto.randomBytes(32).toString('hex');
-      await db.query('INSERT INTO sessions(token, user_id) VALUES ($1,$2)', [token, u.rows[0].id]);
+      await db.query('INSERT INTO sessions(token, user_id, user_agent) VALUES ($1,$2,$3)', [token, u.rows[0].id, String(req.headers['user-agent'] || '').slice(0, 200)]);
       audit(u.rows[0].id, 'register', email);
       send(res, 200, { token });
     } catch { send(res, 409, { error: 'Brukeren finnes allerede' }); }
   },
 
   'POST /api/login': async (req, res) => {
-    const { email, password } = await readJson(req);
-    const u = (await db.query('SELECT id, pw_hash FROM users WHERE email=$1', [String(email || '').toLowerCase().trim()])).rows[0];
+    const { email, password, code } = await readJson(req);
+    const u = (await db.query('SELECT id, pw_hash, totp_enabled, totp_secret FROM users WHERE email=$1', [String(email || '').toLowerCase().trim()])).rows[0];
     if (!u || !verify(String(password || ''), u.pw_hash)) { audit(null, 'login_failed', email); return send(res, 401, { error: 'Feil e-post eller passord' }); }
+    if (u.totp_enabled) {
+      if (!code) return send(res, 401, { error: 'Skriv inn koden fra autentiseringsappen', need_totp: true });
+      if (!checkTotp(u.totp_secret, code)) { audit(u.id, 'login_failed_2fa', ''); return send(res, 401, { error: 'Feil kode', need_totp: true }); }
+    }
     const token = crypto.randomBytes(32).toString('hex');
-    await db.query('INSERT INTO sessions(token, user_id) VALUES ($1,$2)', [token, u.id]);
+    await db.query('INSERT INTO sessions(token, user_id, user_agent) VALUES ($1,$2,$3)', [token, u.id, String(req.headers['user-agent'] || '').slice(0, 200)]);
     audit(u.id, 'login', req.headers['user-agent']);
     send(res, 200, { token });
   },
@@ -117,6 +128,7 @@ const routes = {
         ON CONFLICT (user_id) DO UPDATE SET version=$2, data=$3, updated_at=now()`, [uid, version, data]);
       await c.query('COMMIT');
       send(res, 200, { version });
+      features.fireWebhooks(uid, cur?.data, data).catch(() => {});
     } catch (e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); }
   },
 
@@ -149,6 +161,16 @@ const routes = {
   'POST /api/backup/test': async (req, res, uid) => proxyBackup(res, uid, '/test', 'POST'),
   'POST /api/backup/run': async (req, res, uid) => proxyBackup(res, uid, '/run', 'POST'),
   'POST /api/backup/restore': async (req, res, uid) => { const b = await readJson(req); audit(uid, 'restore_start', b.name); proxyBackup(res, uid, '/restore', 'POST', b); },
+  'POST /api/backup/pages': async (req, res, uid) => {
+    const { name } = await readJson(req), email = (await db.query('SELECT email FROM users WHERE id=$1', [uid])).rows[0].email;
+    proxyBackup(res, uid, '/pages', 'POST', { name, email });
+  },
+  'POST /api/backup/upload': async (req, res, uid) => {
+    if (!(await isAdmin(uid))) return send(res, 403, { error: 'Bare administrator' });
+    const chunks = []; for await (const c of req) chunks.push(c);
+    try { const r = await fetch(BACKUP + '/restore-upload', { method: 'POST', body: Buffer.concat(chunks) }); audit(uid, 'restore_upload', ''); send(res, r.status, await r.json()); }
+    catch { send(res, 502, { error: 'Backup-tjenesten svarer ikke' }); }
+  },
   'GET /api/backup/key': async (req, res, uid) => {
     if (!(await isAdmin(uid))) return send(res, 403, { error: 'Bare administrator' });
     await loadSettings(); audit(uid, 'backup_key_shown', ''); send(res, 200, { key: settings.bk_key });
@@ -194,15 +216,22 @@ async function proxyBackup(res, uid, path, method = 'GET', body) {
 }
 const PUBLIC = new Set(['GET /api/health', 'POST /api/register', 'POST /api/login']);
 
+features = createFeatures({ db, send, readJson, audit, isAdmin, hash, verify, settings, saveSetting, cors });
+Object.assign(routes, features.routes);
+
 http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') { res.writeHead(204, cors); return res.end(); }
-  const key = `${req.method} ${req.url.split('?')[0]}`;
-  const h = routes[key];
+  const url = req.url.split('?')[0], key = `${req.method} ${url}`;
+  let h = routes[key], isPublic = PUBLIC.has(key), params = [];
+  if (!h) for (const [m, re, pub, fn] of features.param) {
+    const mm = url.match(re);
+    if (mm && (m instanceof RegExp ? m.test(req.method) : m === req.method)) { h = fn; isPublic = pub; params = mm.slice(1); break; }
+  }
   if (!h) return send(res, 404, { error: 'Ikke funnet' });
   try {
     let uid = null;
-    if (!PUBLIC.has(key)) { uid = await auth(req); if (!uid) return send(res, 401, { error: 'Ikke innlogget' }); }
-    await h(req, res, uid);
+    if (!isPublic) { uid = await auth(req); if (!uid) return send(res, 401, { error: 'Ikke innlogget' }); }
+    await h(req, res, uid, params);
   } catch (e) {
     console.error(e);
     if (!res.headersSent) send(res, 500, { error: 'Serverfeil' }); else res.end();
