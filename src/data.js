@@ -43,4 +43,10 @@ export const INBOX = [
   { a: 'S', c: '#7a5cc7', who: 'Sara', t: 'nevnte deg i «Elektriske kretser»', page: 'Elektriske kretser', when: 'man.', unread: false, id: 'kretser' }
 ];
 
-export const BLOCK_TYPES = [['p', 'Tekst', 'Aa'], ['h', 'Overskrift', 'H'], ['li', 'Punktliste', '•'], ['todo', 'Gjøremål', '☐'], ['toggle', 'Utvidbar liste', '▸'], ['callout', 'Callout', '💡'], ['math', 'Formel', '∑']];
+// [type, navn, ikon, gruppe, søkeord]
+export const BLOCK_TYPES = [
+  ['p', 'Tekst', 'Aa', 'Foreslått', 'avsnitt tekst'], ['todo', 'Gjøremål', '☐', 'Foreslått', 'oppgave sjekkliste'], ['h', 'Overskrift', 'H', 'Foreslått', 'tittel heading'],
+  ['li', 'Punktliste', '•', 'Standardblokker', 'liste kulepunkt'], ['toggle', 'Utvidbar liste', '▸', 'Standardblokker', 'toggle skjul'],
+  ['quote', 'Sitat', '“', 'Standardblokker', 'quote'], ['callout', 'Callout', '💡', 'Standardblokker', 'merknad boks'], ['divider', 'Skillelinje', '—', 'Standardblokker', 'linje hr'],
+  ['math', 'Formel', '∑', 'Avanserte blokker', 'matte ligning latex'], ['ai', 'Spør AI', '✦', 'Avanserte blokker', 'ai assistent']
+];

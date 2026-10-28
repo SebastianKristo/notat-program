@@ -25,9 +25,11 @@ cp .env.example .env              # sett POSTGRES_PASSWORD (og evt. DOMAIN for H
 docker compose up -d --build
 ```
 
-Alt annet gjøres i appen under **Innstillinger** (trykk M-logoen). Første konto blir administrator.
-- **AI (Ollama):** adressen til Ollama (f.eks. Mac mini på `http://mac-mini.local:11434`) og standardmodell. Ollama må lytte på nettverket: `launchctl setenv OLLAMA_HOST 0.0.0.0`.
+Alt annet gjøres i appen under **Innstillinger** (profilknappen / ⚙️). Første konto blir administrator.
+- **Marg AI:** Ollama (lokalt, f.eks. Mac mini), Google Gemini (gratis nivå) og Anthropic Claude (betalt, med månedsbudsjett). API-nøkler lagres kryptert med `MARG_SECRET`. Standardmodell, reserve til Ollama hvis en skytjeneste feiler, og «hold private sider lokalt». Ollama må lytte på nettverket: `launchctl setenv OLLAMA_HOST 0.0.0.0`.
+- **Sikkerhetskopi:** til en SMB-deling (NAS) med test, tidsplan, lagringstid, AES-256-kryptering, manuell backup og gjenoppretting.
 - **Serverapplikasjon:** viser versjon og nye endringer, og «Oppdater server» henter siste kode og bygger tjenestene på nytt.
+- **Revisjonslogg:** innlogginger, AI-bruk, backup og endringer i innstillinger.
 
 Vil du heller kjøre Ollama i Docker: `docker compose --profile ollama up -d` og bruk `http://ollama:11434` i innstillingene.
 

@@ -1,8 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { C, ST, ORDER, MODELS as DEFAULT_MODELS, EVENTS, INBOX, BLOCK_TYPES, seedPages, seedRows, seedRecent, seedPrivate } from './data.js';
+import { C, ST, ORDER, EVENTS, INBOX, BLOCK_TYPES, seedPages, seedRows, seedRecent, seedPrivate } from './data.js';
 import { Icon, Logo } from './icons.jsx';
 import { useSync } from './sync.js';
-import ServerSettings from './ServerSettings.jsx';
+import SettingsView from './SettingsView.jsx';
+import EmojiPicker from './EmojiPicker.jsx';
+import { AppIcon } from './appicons.jsx';
 
 const KEY = 'marg:v1';
 const load = () => { try { return JSON.parse(localStorage.getItem(KEY)) || null; } catch { return null; } };
@@ -62,13 +64,27 @@ export default function App() {
   const [settings, setSettings] = useState(false);
   const tt = useRef(); const msgRef = useRef();
   const sync = useSync(data, setData);
-  const [MODELS, setModels] = useState(DEFAULT_MODELS);
+  // Modeller fra serveren som "leverandør:modell". Tom streng = serverens standardmodell.
+  const [MODELS, setModels] = useState(['']);
   useEffect(() => {
     if (!sync.auth.token) return;
     fetch(data.server.replace(/\/$/, '') + '/api/models', { headers: sync.authHeader }).then(r => r.ok ? r.json() : null)
-      .then(m => { const chat = (m || []).filter(n => !/embed/.test(n)); if (chat.length) { setModels(chat); setModel(0); } }).catch(() => {});
+      .then(m => { if (m?.models) setModels(['', ...m.models]); }).catch(() => {});
   }, [sync.auth.token, data.server]);
-  const [cred, setCred] = useState({ email: '', password: '', err: '' });
+  const modelLabel = m => m ? m.split(':').slice(1).join(':') + ' · ' + { ollama: 'Ollama', gemini: 'Gemini', claude: 'Claude' }[m.split(':')[0]] : 'Standardmodell';
+  const [exp, setExp] = useState({});          // åpne noder i sidetreet
+  const [ctxMenu, setCtxMenu] = useState(null); // { id, x, y }
+  const [renaming, setRenaming] = useState(null);
+  const [picker, setPicker] = useState(null);   // { id, x, y } for ikonvelger
+  const [drag, setDrag] = useState({ id: null, over: null });
+  const [slashQ, setSlashQ] = useState('');
+  const appIcon = data.appIcon || 'b';
+  const iconRef = useRef();
+  useEffect(() => { // favicon følger valgt appikon
+    const svg = iconRef.current?.innerHTML; if (!svg) return;
+    let l = document.querySelector('link[rel=icon]'); if (!l) { l = document.createElement('link'); l.rel = 'icon'; document.head.appendChild(l); }
+    l.href = 'data:image/svg+xml,' + encodeURIComponent(svg.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"'));
+  }, [appIcon]);
 
   useEffect(() => { try { localStorage.setItem(KEY, JSON.stringify(data)); } catch { /* full */ } }, [data]);
   useEffect(() => { if (msgRef.current) msgRef.current.scrollTop = msgRef.current.scrollHeight; }, [msgs, ai]);
@@ -88,17 +104,34 @@ export default function App() {
   const insertBlock = (i, b) => { updPage(pageId, p => { const bl = [...p.blocks]; bl.splice(i, 0, b); return { ...p, blocks: bl }; }); setFocus(b.id); };
   const removeBlock = i => updPage(pageId, p => ({ ...p, blocks: p.blocks.filter((_, j) => j !== i) }));
 
-  const newPage = () => {
+  const newPage = (parent = null) => {
     const id = 'p' + uid();
     const b = { id: uid(), type: 'p', text: '' };
-    setData(d => ({ ...d, pages: { ...d.pages, [id]: { icon: 'doc', title: '', props: [], blocks: [b] } }, priv: [id, ...d.priv] }));
+    setData(d => ({ ...d, pages: { ...d.pages, [id]: { icon: 'doc', title: '', props: [], blocks: [b], parent, t: Date.now() } }, priv: parent ? d.priv : [id, ...d.priv] }));
+    if (parent) setExp(e => ({ ...e, [parent]: true }));
     setPrev(isPg ? prev : screen); setPageId(id); setScreen('page'); setAi(false); setFocus('title');
-    showToast('Ny side opprettet');
+    showToast(parent ? 'Ny underside opprettet' : 'Ny side opprettet');
   };
-  const deletePage = () => {
-    const id = pageId;
-    setData(d => { const p = { ...d.pages }; delete p[id]; return { ...d, pages: p, recent: d.recent.filter(x => x !== id), priv: d.priv.filter(x => x !== id) }; });
-    setScreen('home'); showToast('Siden er slettet');
+  const children = id => Object.keys(pages).filter(k => (pages[k].parent || null) === id);
+  const isDescendant = (anc, id) => { for (let p = pages[id]?.parent; p; p = pages[p]?.parent) if (p === anc) return true; return false; };
+  const setParent = (id, parent) => {
+    if (id === parent || (parent && isDescendant(id, parent))) { showToast('Kan ikke flytte en side inn i seg selv'); return; }
+    updPage(id, p => ({ ...p, parent }));
+    setData(d => ({ ...d, priv: parent ? d.priv.filter(x => x !== id) : d.priv.includes(id) ? d.priv : [...d.priv, id] }));
+    if (parent) setExp(e => ({ ...e, [parent]: true }));
+    showToast(parent ? `Flyttet inn i «${pages[parent].title || 'Uten tittel'}»` : 'Flyttet til toppnivå');
+  };
+  const deletePage = (id = pageId) => {
+    if (!confirm(`Slette «${pages[id]?.title || 'Uten tittel'}»?`)) return;
+    setData(d => { const p = { ...d.pages }; const par = p[id]?.parent || null; delete p[id];
+      for (const k in p) if (p[k].parent === id) p[k] = { ...p[k], parent: par, t: Date.now() };
+      return { ...d, pages: p, recent: d.recent.filter(x => x !== id), priv: d.priv.filter(x => x !== id) }; });
+    if (id === pageId) setScreen('home'); showToast('Siden er slettet');
+  };
+  const duplicate = id => {
+    const nid = 'p' + uid(), src = pages[id];
+    setData(d => ({ ...d, pages: { ...d.pages, [nid]: { ...src, title: (src.title || 'Uten tittel') + ' (kopi)', blocks: (src.blocks || []).map(b => ({ ...b, id: uid() })), fav: false, t: Date.now() } }, priv: src.parent ? d.priv : [...d.priv, nid] }));
+    showToast('Duplisert');
   };
 
   const stOf = r => r.st;
@@ -114,16 +147,17 @@ export default function App() {
     : /uke/i.test(qq) ? 'Denne uken:\n• Tir 09:00 Lab ELEK1100\n• Tir 14:00 Gruppemøte Øving 7\n• Ons 12:15 Forelesning MATA1100\n• Ons 23:59 Frist Øving 7\n\nKilder: Kalender · Øving 7 · Møtenotater 27. okt.'
     : /oppsummer/i.test(qq) ? `«${ctx || 'Øving 7'}» kort fortalt: ${(page.blocks || []).filter(b => b.type === 'p' || b.type === 'callout').map(b => b.text).slice(0, 2).join(' ') || 'Ingen tekst å oppsummere ennå.'}`
     : /minterm/i.test(qq) ? 'Fant 2 notater: «Booleske funksjoner, minterm og maksterm» og «Booleske forenklinger og Karnaugh-diagram».'
-    : `Fikk ikke kontakt med ${MODELS[model]} på ${data.server}. Sjekk serveradressen i innstillinger (trykk på M-logoen).`;
+    : `Fikk ikke kontakt med ${data.server}. Logg inn og sjekk Marg AI under Innstillinger.`;
   const ask = async qq => {
     setAi(true); setInput(''); setQ('');
     setMsgs(m => [...m, { r: 'u', t: qq }, { r: 'a', t: '…' }]);
     const set = t => setMsgs(m => { const n = [...m]; n[n.length - 1] = { r: 'a', t }; return n; });
     try {
-      const ctl = new AbortController(); const to = setTimeout(() => ctl.abort(), 4000);
+      const ctl = new AbortController(); const to = setTimeout(() => ctl.abort(), 20000);
       const res = await fetch(data.server.replace(/\/$/, '') + '/api/ai', { method: 'POST', signal: ctl.signal, headers: { 'Content-Type': 'application/json', ...sync.authHeader },
-        body: JSON.stringify({ model: MODELS[model], prompt: qq, context: isPg ? { pageId, text: pageText(page) } : { workspace: true } }) });
+        body: JSON.stringify({ model: MODELS[model % MODELS.length], prompt: qq, context: isPg ? { pageId, text: pageText(page), private: !!page.private } : { workspace: true } }) });
       clearTimeout(to);
+      if (res.status !== 200 && res.status !== 0) { const j = await res.json().catch(() => ({})); if (j.error) { set(j.error); return; } }
       if (!res.ok || !res.body) throw new Error();
       const rd = res.body.getReader(), dec = new TextDecoder(); let acc = '';
       for (;;) { const { done, value } = await rd.read(); if (done) break; acc += dec.decode(value, { stream: true }); set(acc); }
@@ -133,21 +167,62 @@ export default function App() {
   const sugg = [['📝', ctx ? 'Oppsummer denne siden' : 'Oppsummer Øving 7'], ['🗺️', 'Lag øvingsoppgaver om Karnaugh'], ['🔎', 'Finn notatene mine om minterm'], ['📅', 'Hva har jeg denne uken?']];
 
   // ---------- pieces ----------
-  const row = id => { const p = pages[id]; if (!p) return null; const act = wide && isPg && id === pageId;
-    return <div key={id} className="press" onClick={() => open(id)} style={{ display: 'flex', alignItems: 'center', gap: wide ? 10 : 15, height: wide ? 34 : 50, padding: wide ? '0 12px' : '0 22px', margin: wide ? '0 6px' : 0, borderRadius: wide ? 6 : 0, cursor: 'pointer', background: act ? '#2a2a2a' : 'transparent' }}>
-      <span style={{ width: wide ? 20 : 28, flex: 'none', display: 'grid', placeItems: 'center', color: '#9b9a97' }}><PageIcon icon={p.icon} size={wide ? 16 : 23} /></span>
-      <span style={{ fontSize: wide ? 14.5 : 17.5, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.title || 'Uten tittel'}</span>
+  const row = id => { const p = pages[id]; if (!p) return null;
+    return <div key={id} className="press" onClick={() => open(id)} style={{ display: 'flex', alignItems: 'center', gap: 15, height: 50, padding: '0 22px', cursor: 'pointer' }}>
+      <span style={{ width: 28, flex: 'none', display: 'grid', placeItems: 'center', color: '#9b9a97' }}><PageIcon icon={p.icon} size={23} /></span>
+      <span style={{ fontSize: 17.5, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.title || 'Uten tittel'}</span>
     </div>; };
-  const sections = [['Nylige', data.recent], ['Privat', data.priv]].map(([name, ids]) => { const op = !closed[name];
-    return <div key={name}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: wide ? '16px 18px 4px' : '22px 24px 6px' }}>
-        <span onClick={() => setClosed(c => ({ ...c, [name]: op }))} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: wide ? 12.5 : 15, fontWeight: 600, color: '#8f8e8a', cursor: 'pointer' }}>{name} <span style={{ fontSize: 11, transform: op ? 'none' : 'rotate(-90deg)', display: 'inline-block' }}>⌄</span></span>
-        {name === 'Privat' && <span onClick={newPage} style={{ color: '#8f8e8a', fontSize: 18, cursor: 'pointer' }}>+</span>}
-      </div>
-      {op && ids.filter(id => pages[id]).map(row)}
-    </div>; });
 
-  const Home = () => <div>{sections}</div>;
+  // Sidetre for iPad/Mac: undersider, dra og slipp, kontekstmeny og ikonvelger
+  const treeRow = (id, depth = 0) => { const p = pages[id]; if (!p) return null;
+    const kids = children(id), open_ = !!exp[id], act = isPg && id === pageId, over = drag.over === id && drag.id !== id;
+    return <div key={id}>
+      <div className="press tree-row" draggable={renaming !== id}
+        onDragStart={e => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', id); setDrag({ id, over: null }); }}
+        onDragEnd={() => setDrag({ id: null, over: null })}
+        onDragOver={e => { e.preventDefault(); if (drag.over !== id) setDrag(d => ({ ...d, over: id })); }}
+        onDrop={e => { e.preventDefault(); e.stopPropagation(); const src = e.dataTransfer.getData('text/plain'); setDrag({ id: null, over: null }); if (src && src !== id) setParent(src, id); }}
+        onClick={() => renaming !== id && open(id)}
+        onContextMenu={e => { e.preventDefault(); setCtxMenu({ id, x: e.clientX, y: e.clientY }); }}
+        style={{ display: 'flex', alignItems: 'center', gap: 4, height: 30, paddingLeft: 6 + depth * 14, paddingRight: 6, margin: '0 6px', borderRadius: 6, cursor: 'pointer', background: over ? '#1f3a5a' : act ? '#2a2a2a' : 'transparent', boxShadow: over ? 'inset 0 0 0 1px #2f80ed' : 'none' }}>
+        <span onClick={e => { e.stopPropagation(); setExp(x => ({ ...x, [id]: !open_ })); }} style={{ width: 16, flex: 'none', color: '#6f6e6a', fontSize: 10, textAlign: 'center', visibility: kids.length ? 'visible' : 'hidden', transform: open_ ? 'rotate(90deg)' : 'none' }}>▶</span>
+        <span onClick={e => { e.stopPropagation(); setPicker({ id, x: e.clientX, y: e.clientY + 12 }); }} title="Endre ikon" style={{ width: 22, flex: 'none', display: 'grid', placeItems: 'center', color: '#9b9a97' }}><PageIcon icon={p.icon} size={15} /></span>
+        {renaming === id
+          ? <input autoFocus defaultValue={p.title} onClick={e => e.stopPropagation()} onBlur={e => { updPage(id, x => ({ ...x, title: e.target.value })); setRenaming(null); }}
+              onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') setRenaming(null); }}
+              style={{ flex: 1, minWidth: 0, height: 22, border: 0, borderRadius: 4, background: '#2f2f2f', color: '#ebebe9', font: 'inherit', fontSize: 14, padding: '0 6px', outline: '1px solid #2f80ed' }} />
+          : <span style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: act ? '#ebebe9' : '#cfcfcc' }}>{p.title || 'Uten tittel'}{p.private && <span title="Privat – bare lokal AI" style={{ marginLeft: 5, fontSize: 11 }}>🔒</span>}</span>}
+        <span className="hover-show" onClick={e => { e.stopPropagation(); setCtxMenu({ id, x: e.clientX, y: e.clientY }); }} style={{ color: '#8f8e8a', letterSpacing: 1, padding: '0 3px' }}>···</span>
+        <span className="hover-show" onClick={e => { e.stopPropagation(); newPage(id); }} title="Legg til underside" style={{ color: '#8f8e8a', fontSize: 15, padding: '0 3px' }}>+</span>
+      </div>
+      {open_ && kids.map(k => treeRow(k, depth + 1))}
+    </div>; };
+  const dropZone = (name, f) => ({
+    onDragOver: e => { e.preventDefault(); if (drag.over !== name) setDrag(d => ({ ...d, over: name })); },
+    onDrop: e => { e.preventDefault(); const src = e.dataTransfer.getData('text/plain'); setDrag({ id: null, over: null }); if (src) f(src); }
+  });
+  const sectionHead = (name, extra, dz) => { const op = !closed[name];
+    return <div {...(dz || {})} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: wide ? '16px 18px 4px' : '22px 24px 6px', borderRadius: 6, background: dz && drag.over === name ? '#1f3a5a' : 'transparent' }}>
+      <span onClick={() => setClosed(c => ({ ...c, [name]: op }))} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: wide ? 12.5 : 15, fontWeight: 600, color: '#8f8e8a', cursor: 'pointer' }}>{name} <span style={{ fontSize: 11, transform: op ? 'none' : 'rotate(-90deg)', display: 'inline-block' }}>⌄</span></span>
+      {extra}
+    </div>; };
+  const roots = Object.keys(pages).filter(k => !pages[k].parent);
+  const favs = Object.keys(pages).filter(k => pages[k].fav);
+  const sidebarTree = <>
+    {favs.length > 0 && <div>{sectionHead('Favoritter')}{!closed.Favoritter && favs.map(id => treeRow(id))}</div>}
+    <div>{sectionHead('Sider', <span onClick={() => newPage()} style={{ color: '#8f8e8a', fontSize: 18, cursor: 'pointer' }}>+</span>, dropZone('Sider', id => setParent(id, null)))}
+      {!closed.Sider && roots.map(id => treeRow(id))}</div>
+  </>;
+  const sections = [['Nylige', data.recent], ['Privat', data.priv.filter(id => !pages[id]?.parent)]].map(([name, ids]) =>
+    <div key={name}>{sectionHead(name, name === 'Privat' && <span onClick={() => newPage()} style={{ color: '#8f8e8a', fontSize: 18, cursor: 'pointer' }}>+</span>)}
+      {!closed[name] && ids.filter(id => pages[id]).map(row)}</div>);
+
+  const quick = [['cal', 'Kalender', Icon.cal], ['inbox', 'Innboks', Icon.inbox]];
+  const Home = () => <div>
+    <div style={{ paddingTop: 10 }}>{quick.map(([k, l, Ic]) => <div key={k} className="press" onClick={() => setScreen(k)} style={{ display: 'flex', alignItems: 'center', gap: 15, height: 50, padding: '0 22px', cursor: 'pointer' }}>
+      <span style={{ width: 28, display: 'grid', placeItems: 'center', color: '#9b9a97' }}><Ic /></span><span style={{ fontSize: 17.5, fontWeight: 500 }}>{l}</span>
+      {k === 'inbox' && <span style={{ marginLeft: 'auto', fontSize: 13, color: '#8f8e8a' }}>{INBOX.filter(n => n.unread).length} uleste</span>}</div>)}</div>
+    {sections}</div>;
 
   const pill = (v, c) => <span style={{ fontSize: 14, padding: '3px 9px', borderRadius: 5, background: C[c]?.bg, color: C[c]?.fg }}>{v}</span>;
 
@@ -162,7 +237,7 @@ export default function App() {
       if (b.type !== 'p') updBlock(i, { type: 'p' });
       else if (page.blocks.length > 1) { removeBlock(i); const pb = page.blocks[i - 1]; if (pb) { if (!pb.id) updBlock(i - 1, { id: uid() }); setFocus(pb.id || null); } }
     } else if (e.key === '/' && !e.currentTarget.innerText) {
-      e.preventDefault(); setSlash(i);
+      e.preventDefault(); setSlashQ(''); setSlash(i);
     } else if (e.key === 'Escape') setSlash(null);
   };
 
@@ -184,23 +259,55 @@ export default function App() {
         <div style={{ display: 'flex', gap: 10, fontSize: 17, lineHeight: 1.55 }}><span onClick={() => setTog(t => ({ ...t, [key]: !open_ }))} style={{ cursor: 'pointer', color: '#9b9a97', width: 14 }}>{open_ ? '▾' : '▸'}</span>{ed({ fontWeight: 500 }, 'Utvidbar liste')}</div>
         {open_ && <div style={{ padding: '4px 0 4px 24px', fontSize: 16.5, lineHeight: 1.55, color: '#bcbcb9', display: 'flex' }}>
           <Editable text={b.body || ''} placeholder="Tomt innhold" onChange={t => updBlock(i, { body: t })} /></div>}</div>);
+      case 'quote': return wrap(<div style={{ borderLeft: '3px solid #ebebe9', padding: '2px 0 2px 14px', margin: '6px 0', fontSize: 17.5, lineHeight: 1.55 }}>{ed({}, 'Sitat')}</div>);
+      case 'divider': return wrap(<div tabIndex={0} onKeyDown={onBlockKey(i, { ...b, text: '' })} style={{ padding: '10px 0', outline: 'none' }}><div style={{ height: 1, background: '#3a3a3a' }} /></div>);
       default: return wrap(ed({ fontSize: 17, lineHeight: 1.55, color: '#dcdcda', padding: '3px 0' }, wide ? 'Skriv, eller trykk «/» for kommandoer' : 'Skriv noe …'));
     }
   };
 
-  const SlashMenu = i => <div style={{ position: 'absolute', left: 0, top: '100%', zIndex: 15, width: 240, background: 'rgba(44,44,44,.96)', backdropFilter: 'blur(20px)', borderRadius: 14, padding: 6, boxShadow: '0 12px 32px rgba(0,0,0,.5)' }}>
-    {BLOCK_TYPES.map(([t, l, ic]) => <div key={t} className="press" onMouseDown={e => e.preventDefault()} onClick={() => { const id = page.blocks[i].id || uid(); updBlock(i, { type: t, id }); setFocus(id + '-' + t); setTimeout(() => setFocus(id), 0); setSlash(null); }}
-      style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '9px 10px', borderRadius: 8, cursor: 'pointer', fontSize: 15 }}><span style={{ width: 26, height: 26, borderRadius: 5, background: '#333', display: 'grid', placeItems: 'center', fontSize: 13 }}>{ic}</span>{l}</div>)}
-  </div>;
+  const applyType = (i, t) => {
+    setSlash(null); setSlashQ('');
+    if (t === 'ai') { setAi(true); return; }
+    const id = page.blocks[i].id || uid(); updBlock(i, { type: t, id }); setFocus(id + '-' + t); setTimeout(() => setFocus(id), 0);
+  };
+  const SlashMenu = i => { const ql = slashQ.trim().toLowerCase();
+    const list = BLOCK_TYPES.filter(([t, l, , , w]) => !ql || (l + ' ' + w).toLowerCase().includes(ql));
+    const groups = ql ? [['Treff', list]] : [...new Set(list.map(x => x[3]))].map(g => [g, list.filter(x => x[3] === g && (g !== 'Standardblokker' || !['p', 'todo', 'h'].includes(x[0])))]);
+    return <div onClick={e => e.stopPropagation()} style={{ position: 'absolute', left: 0, top: '100%', zIndex: 15, width: 280, maxHeight: 360, display: 'flex', flexDirection: 'column', background: 'rgba(44,44,44,.97)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', borderRadius: 14, boxShadow: '0 12px 32px rgba(0,0,0,.5)', overflow: 'hidden' }}>
+      <input autoFocus value={slashQ} onChange={e => setSlashQ(e.target.value)} placeholder="Søk etter blokktype"
+        onKeyDown={e => { if (e.key === 'Escape') { setSlash(null); setSlashQ(''); } if (e.key === 'Enter' && list[0]) { e.preventDefault(); applyType(i, list[0][0]); } }}
+        style={{ margin: 8, height: 32, borderRadius: 8, border: 0, background: '#1f1f1f', color: '#ebebe9', padding: '0 10px', font: 'inherit', fontSize: 14 }} />
+      <div style={{ overflow: 'auto', padding: '0 6px 6px' }}>
+        {groups.filter(([, l]) => l.length).map(([g, l]) => <div key={g}>
+          <div style={{ fontSize: 12, color: '#8f8e8a', fontWeight: 600, padding: '6px 8px 2px' }}>{g}</div>
+          {l.map(([t, label, ic]) => <div key={t} className="press" onMouseDown={e => e.preventDefault()} onClick={() => applyType(i, t)}
+            style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '7px 8px', borderRadius: 8, cursor: 'pointer', fontSize: 14.5 }}>
+            <span style={{ width: 26, height: 26, borderRadius: 5, background: '#333', display: 'grid', placeItems: 'center', fontSize: 13 }}>{ic}</span>{label}
+            {(t === 'ai' || t === 'divider') && <span style={{ marginLeft: 'auto', fontSize: 11, padding: '1px 6px', borderRadius: 4, background: '#1f3a5a', color: '#86b6ec' }}>Ny</span>}</div>)}
+        </div>)}
+        {!list.length && <div style={{ color: '#8f8e8a', fontSize: 13.5, padding: 10 }}>Ingen treff</div>}
+      </div>
+      <div onClick={() => { setSlash(null); setSlashQ(''); }} style={{ fontSize: 12.5, color: '#8f8e8a', padding: '8px 14px', boxShadow: 'inset 0 1px 0 #3a3a3a', cursor: 'pointer', display: 'flex', justifyContent: 'space-between' }}><span>Lukk menyen</span><span>esc</span></div>
+    </div>; };
 
   const PageView = () => <div style={{ padding: wide ? '40px 0 30px' : '30px 24px', maxWidth: 760, margin: '0 auto', paddingLeft: wide ? 56 : 24, paddingRight: wide ? 56 : 24 }}>
-    <div onClick={() => { const e = prompt('Emoji for siden', page.icon === 'doc' ? '' : page.icon); if (e !== null) updPage(pageId, p => ({ ...p, icon: e.trim() || 'doc' })); }} style={{ fontSize: 54, lineHeight: 1, marginBottom: 12, cursor: 'pointer', color: '#9b9a97' }}>{page.icon === 'doc' ? <Icon.doc size={54} /> : page.icon}</div>
+    <div style={{ position: 'relative' }}>
+      <div onClick={() => setPicker({ id: pageId, inline: true })} title="Endre ikon" style={{ fontSize: 54, lineHeight: 1, marginBottom: 12, cursor: 'pointer', color: '#9b9a97', display: 'inline-block' }}>{page.icon === 'doc' ? <Icon.doc size={54} /> : page.icon}</div>
+      {picker?.inline && picker.id === pageId && <EmojiPicker style={{ left: 0, top: 64 }} onClose={() => setPicker(null)} onPick={e => { updPage(pageId, p => ({ ...p, icon: e })); setPicker(null); }} onRemove={() => { updPage(pageId, p => ({ ...p, icon: 'doc' })); setPicker(null); }} />}
+    </div>
+    {page.private && <div style={{ display: 'inline-flex', gap: 6, fontSize: 12.5, color: '#e3b665', background: '#4a3b1c', padding: '3px 8px', borderRadius: 5, marginBottom: 10 }}>🔒 Privat · sendes bare til lokal AI</div>}
     <Editable text={page.title} placeholder="Uten tittel" autoFocus={focus === 'title'} style={{ fontSize: 30, fontWeight: 700, lineHeight: 1.2, marginBottom: 14 }}
       onChange={t => updPage(pageId, p => ({ ...p, title: t }))} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); const b = page.blocks[0]; if (b) { const id = b.id || uid(); updBlock(0, { id }); setFocus(id); } } }} />
     {(page.props || []).map((p, i) => <div key={i} style={{ display: 'flex', alignItems: 'center', height: 34 }}><span style={{ width: 110, color: '#8f8e8a', fontSize: 15 }}>{p.k}</span>{pill(p.v, p.c)}</div>)}
     <div style={{ height: 1, background: '#2c2c2c', margin: '14px 0 10px' }} />
     {(page.blocks || []).map((b, i) => <React.Fragment key={b.id || i}>{Block({ b, i })}</React.Fragment>)}
     <div onClick={() => insertBlock(page.blocks.length, { id: uid(), type: 'p', text: '' })} style={{ color: '#6f6e6a', fontSize: 15, padding: '14px 0', cursor: 'text' }}>+ Ny blokk</div>
+    {(children(pageId).length > 0 || !wide) && <div style={{ marginTop: 18, borderTop: '1px solid #2c2c2c', paddingTop: 12 }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: '#8f8e8a', marginBottom: 4 }}>Undersider</div>
+      {children(pageId).map(id => <div key={id} className="press" onClick={() => open(id)} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '8px 4px', borderRadius: 6, cursor: 'pointer', fontSize: 16 }}>
+        <span style={{ width: 24, display: 'grid', placeItems: 'center', color: '#9b9a97' }}><PageIcon icon={pages[id].icon} size={18} /></span><span style={{ textDecoration: 'underline', textDecorationColor: '#444', textUnderlineOffset: 3 }}>{pages[id].title || 'Uten tittel'}</span></div>)}
+      <div onClick={() => newPage(pageId)} style={{ color: '#6f6e6a', fontSize: 15, padding: '8px 4px', cursor: 'pointer' }}>+ Ny underside</div>
+    </div>}
   </div>;
 
   const DbView = () => { const rows = data.rows;
@@ -273,7 +380,10 @@ export default function App() {
       {!wide && <div style={{ display: 'flex', justifyContent: 'center', padding: '8px 0 0' }}><span style={{ width: 38, height: 5, borderRadius: 3, background: '#444' }} /></div>}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 18px 8px' }}>
         <span onClick={() => setAi(false)} style={{ fontSize: 16, cursor: 'pointer' }}>Lukk</span>
-        <span onClick={() => setModel((model + 1) % MODELS.length)} style={{ display: 'flex', gap: 6, fontSize: 14, fontWeight: 600, padding: '6px 12px', borderRadius: 16, background: '#2c2c2c', cursor: 'pointer' }}>{MODELS[model % MODELS.length]} <span style={{ color: '#8f8e8a', fontWeight: 400 }}>· server ⌄</span></span>
+        <label style={{ position: 'relative', display: 'flex', gap: 6, fontSize: 14, fontWeight: 600, padding: '6px 12px', borderRadius: 16, background: '#2c2c2c', cursor: 'pointer', maxWidth: '60%' }}>
+          <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{modelLabel(MODELS[model % MODELS.length])}</span><span style={{ color: '#8f8e8a', fontWeight: 400 }}>⌄</span>
+          <select value={model % MODELS.length} onChange={e => setModel(+e.target.value)} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }}>
+            {MODELS.map((m, i) => <option key={m || 'std'} value={i}>{modelLabel(m)}</option>)}</select></label>
         <span onClick={() => setMsgs([])} style={{ fontSize: 16, color: '#8f8e8a', cursor: 'pointer' }}>Ny</span>
       </div>
       <div ref={msgRef} style={{ flex: '1 1 0', overflow: 'auto', padding: '10px 18px', display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -285,41 +395,41 @@ export default function App() {
           : <div key={i} style={{ alignSelf: 'flex-start', maxWidth: '96%', fontSize: 16, lineHeight: 1.55, whiteSpace: 'pre-wrap', color: '#dcdcda' }}>{m.t}</div>)}
       </div>
       <form onSubmit={e => { e.preventDefault(); const v = input.trim(); if (v) ask(v); }} style={{ margin: '8px 14px calc(14px + env(safe-area-inset-bottom))', background: '#2a2a2a', borderRadius: 22, padding: '10px 10px 10px 16px', display: 'flex', flexDirection: 'column', gap: 8, boxShadow: 'inset 0 0 0 1px rgba(255,255,255,.06)' }}>
-        {ctx && <span style={{ alignSelf: 'flex-start', fontSize: 13, color: '#bcbcb9', background: '#333', padding: '3px 9px', borderRadius: 10, maxWidth: '100%', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>@ {ctx}</span>}
+        {ctx && <span style={{ alignSelf: 'flex-start', fontSize: 13, color: '#bcbcb9', background: '#333', padding: '3px 9px', borderRadius: 10, maxWidth: '100%', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>@ {ctx}{page.private ? ' · 🔒 lokal AI' : ''}</span>}
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}><input value={input} onChange={e => setInput(e.target.value)} placeholder="Spør om hva som helst …" style={{ flex: 1, minWidth: 0, border: 0, outline: 'none', background: 'transparent', color: '#ebebe9', font: 'inherit', fontSize: 16.5 }} />
           <button type="submit" style={{ width: 34, height: 34, borderRadius: '50%', border: 0, background: '#ebebe9', color: '#191919', fontSize: 17, fontWeight: 700, cursor: 'pointer' }}>↑</button></div>
       </form>
     </div>
   </div>;
 
-  const Settings = <div onClick={e => e.target === e.currentTarget && setSettings(false)} style={{ position: 'absolute', inset: 0, zIndex: 25, background: 'rgba(0,0,0,.5)', display: 'grid', placeItems: 'center', padding: 20 }}>
-    <div style={{ width: '100%', maxWidth: 420, maxHeight: '88vh', overflow: 'auto', boxSizing: 'border-box', background: '#202020', borderRadius: 16, padding: 22, boxShadow: 'inset 0 0 0 1px #2c2c2c' }}>
-      <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 16 }}>Innstillinger</div>
-      <div style={{ fontSize: 13.5, color: '#8f8e8a', marginBottom: 6 }}>Serveradresse</div>
-      <input value={data.server} onChange={e => setData(d => ({ ...d, server: e.target.value }))} style={{ width: '100%', boxSizing: 'border-box', height: 42, borderRadius: 10, border: 0, background: '#2a2a2a', color: '#ebebe9', padding: '0 12px', font: 'inherit', fontFamily: 'ui-monospace,monospace', fontSize: 14 }} />
-      <div style={{ fontSize: 13, color: '#6f6e6a', margin: '8px 0 14px' }}>Notater lagres lokalt og synkes til serveren når du er logget inn.</div>
-      {sync.auth.token ? <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18, fontSize: 14.5 }}>
-        <span>{sync.auth.email} · <span style={{ color: sync.status === 'synket' ? '#7fc495' : '#e3b665' }}>{sync.status}</span></span>
-        <button onClick={sync.logout} style={btn('#2a2a2a', '#ebebe9')}>Logg ut</button></div>
-      : null}
-      {sync.auth.token ? <ServerSettings server={data.server} authHeader={sync.authHeader} toast={showToast} onModels={m => { const chat = m.filter(n => !/embed/.test(n)); if (chat.length) setModels(chat); }} />
-      : <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 18 }}>
-        {['email', 'password'].map(k => <input key={k} type={k} placeholder={k === 'email' ? 'E-post' : 'Passord'} value={cred[k]} onChange={e => setCred(c => ({ ...c, [k]: e.target.value }))} style={{ height: 42, borderRadius: 10, border: 0, background: '#2a2a2a', color: '#ebebe9', padding: '0 12px', font: 'inherit', fontSize: 15 }} />)}
-        {cred.err && <div style={{ color: '#ec8c8c', fontSize: 13.5 }}>{cred.err}</div>}
-        <div style={{ display: 'flex', gap: 8 }}>{[['Logg inn', false], ['Opprett konto', true]].map(([l, reg]) => <button key={l} onClick={async () => { try { await sync.login(cred.email, cred.password, reg); setCred({ email: '', password: '', err: '' }); showToast('Koblet til ' + data.server.replace(/^https?:\/\//, '')); } catch (e) { setCred(c => ({ ...c, err: e.message === 'Failed to fetch' ? 'Fikk ikke kontakt med serveren' : e.message })); } }} style={btn(reg ? '#2a2a2a' : '#ebebe9', reg ? '#ebebe9' : '#191919')}>{l}</button>)}</div>
-      </div>}
-      <div style={{ display: 'flex', gap: 10, justifyContent: 'space-between' }}>
-        <button onClick={() => { if (confirm('Tilbakestille alle notater til eksempeldata?')) { setData(d => withIds({ ...d, pages: seedPages(), rows: seedRows(), recent: seedRecent, priv: seedPrivate })); setSettings(false); setScreen('home'); } }} style={btn('#2a2a2a', '#ec8c8c')}>Tilbakestill</button>
-        <button onClick={() => setSettings(false)} style={btn('#ebebe9', '#191919')}>Ferdig</button>
-      </div>
-    </div>
-  </div>;
+  const Settings = <SettingsView wide={wide} data={data} setData={setData} sync={sync} appIcon={appIcon} toast={showToast}
+    setAppIcon={k => setData(d => ({ ...d, appIcon: k }))} onClose={() => setSettings(false)}
+    onModels={m => setModels(['', ...m])}
+    onReset={() => { if (confirm('Tilbakestille alle notater på denne enheten til eksempeldata?')) { setData(d => withIds({ ...d, pages: seedPages(), rows: seedRows(), recent: seedRecent, priv: seedPrivate })); setSettings(false); setScreen('home'); } }} />;
 
-  const PageMenu = <div style={{ position: 'absolute', right: 16, top: 'calc(64px + env(safe-area-inset-top))', zIndex: 12, width: 250, background: 'rgba(44,44,44,.96)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', borderRadius: 14, padding: '6px 0', boxShadow: '0 12px 32px rgba(0,0,0,.5)' }}>
-    {[['Kopier tekst', () => { navigator.clipboard?.writeText((page.title || '') + '\n\n' + pageText(page)); showToast('Kopiert'); }],
-      ['Spør AI om siden', () => setAi(true)],
-      ...(page.db ? [] : [['Slett side', deletePage]])].map(([l, f]) => <div key={l} className="press" onClick={() => { setMenu(false); f(); }} style={{ padding: '13px 16px', fontSize: 16, cursor: 'pointer', color: l === 'Slett side' ? '#ec8c8c' : '#ebebe9' }}>{l}</div>)}
-  </div>;
+  // Kontekstmeny for en side (sidetre og ···-menyen)
+  const pageActions = id => { const p = pages[id]; if (!p) return [];
+    return [
+      [p.fav ? 'Fjern fra favoritter' : 'Legg til i favoritter', () => updPage(id, x => ({ ...x, fav: !x.fav }))],
+      ...(wide ? [['Gi nytt navn', () => setRenaming(id)]] : []),
+      ['Dupliser', () => duplicate(id)],
+      ['Legg til underside', () => newPage(id)],
+      ...(p.parent ? [['Flytt til toppnivå', () => setParent(id, null)]] : []),
+      [p.private ? 'Fjern privat-merking' : 'Merk som privat (bare lokal AI)', () => { updPage(id, x => ({ ...x, private: !x.private })); showToast(p.private ? 'Ikke lenger privat' : 'Privat · sendes aldri til Gemini eller Claude'); }],
+      ['Kopier tekst', () => { navigator.clipboard?.writeText((p.title || '') + '\n\n' + pageText(p)); showToast('Kopiert'); }],
+      ['Spør AI om siden', () => { open(id); setAi(true); }],
+      ...(p.db ? [] : [['Slett', () => deletePage(id)]])
+    ]; };
+  const menuBox = { position: 'fixed', zIndex: 45, width: 250, background: 'rgba(44,44,44,.97)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', borderRadius: 12, padding: '6px 0', boxShadow: '0 12px 32px rgba(0,0,0,.5)' };
+  const menuItems = (id, close) => <>{pageActions(id).map(([l, f]) => <div key={l} className="press" onClick={() => { close(); f(); }} style={{ padding: wide ? '8px 14px' : '13px 16px', fontSize: wide ? 14 : 16, cursor: 'pointer', color: l === 'Slett' ? '#ec8c8c' : '#ebebe9' }}>{l}</div>)}
+    {pages[id]?.t && <div style={{ fontSize: 12, color: '#6f6e6a', padding: '8px 14px 4px', boxShadow: 'inset 0 1px 0 #3a3a3a', marginTop: 4 }}>Sist redigert {new Date(pages[id].t).toLocaleString('nb-NO', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</div>}</>;
+  const CtxMenu = ctxMenu && <><div onClick={() => setCtxMenu(null)} onContextMenu={e => { e.preventDefault(); setCtxMenu(null); }} style={{ position: 'fixed', inset: 0, zIndex: 44 }} />
+    <div style={{ ...menuBox, left: Math.min(ctxMenu.x, window.innerWidth - 260), top: Math.min(ctxMenu.y, window.innerHeight - 380) }}>{menuItems(ctxMenu.id, () => setCtxMenu(null))}</div></>;
+  const Picker = picker && !picker.inline && <EmojiPicker style={{ position: 'fixed', left: Math.min(picker.x, window.innerWidth - 350), top: Math.min(picker.y, window.innerHeight - 360) }}
+    onClose={() => setPicker(null)} onPick={e => { updPage(picker.id, p => ({ ...p, icon: e })); setPicker(null); }} onRemove={() => { updPage(picker.id, p => ({ ...p, icon: 'doc' })); setPicker(null); }} />;
+
+  const PageMenu = <><div onClick={() => setMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 11 }} />
+    <div style={{ ...menuBox, position: 'absolute', zIndex: 12, right: 16, top: wide ? 44 : 'calc(64px + env(safe-area-inset-top))' }}>{menuItems(pageId, () => setMenu(false))}</div></>;
 
   const content = screen === 'page' ? PageView() : screen === 'db' ? DbView() : screen === 'cal' ? Cal() : screen === 'inbox' ? Inbox() : screen === 'search' ? Search : Home();
 
@@ -328,16 +438,17 @@ export default function App() {
     const nav = (k, label, ic, f) => <div className="press" onClick={f || (() => { setScreen(k); setMenu(false); })} style={{ display: 'flex', alignItems: 'center', gap: 10, height: 32, padding: '0 12px', margin: '0 6px', borderRadius: 6, cursor: 'pointer', fontSize: 14.5, color: screen === k ? '#ebebe9' : '#bcbcb9', background: screen === k ? '#2a2a2a' : 'transparent' }}>{ic}{label}</div>;
     return <div style={{ position: 'fixed', inset: 0, display: 'flex', background: '#191919' }}>
       <aside style={{ width: 250, flex: 'none', background: '#202020', boxShadow: 'inset -1px 0 0 #262626', display: 'flex', flexDirection: 'column', paddingTop: 'max(14px, env(safe-area-inset-top))' }} className="drag">
-        <div className="nodrag" onClick={() => setSettings(true)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '20px 18px 14px', cursor: 'pointer' }}><Logo size={26} r={7} /><div><div style={{ fontWeight: 600, fontSize: 15 }}>Marg</div><div style={{ fontSize: 11.5, color: sync.status === 'synket' ? '#7fc495' : '#8f8e8a', fontFamily: 'ui-monospace,monospace' }}>● {data.server.replace(/^https?:\/\//, '')}</div></div></div>
+        <div className="nodrag" onClick={() => setSettings(true)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '20px 18px 14px', cursor: 'pointer' }}><AppIcon variant={appIcon} size={28} /><div><div style={{ fontWeight: 600, fontSize: 15 }}>Marg</div><div style={{ fontSize: 11.5, color: sync.status === 'synket' ? '#7fc495' : '#8f8e8a', fontFamily: 'ui-monospace,monospace' }}>● {data.server.replace(/^https?:\/\//, '')}</div></div></div>
         <div className="nodrag" style={{ flex: 1, overflow: 'auto' }}>
           {nav('search', 'Søk', <Icon.search size={17} />)}
           {nav('ai', 'Spør AI', <Icon.chat size={17} />, () => setAi(true))}
           {nav('home', 'Hjem', <Icon.home size={17} />)}
           {nav('cal', 'Kalender', <Icon.cal size={17} />)}
           {nav('inbox', 'Innboks', <Icon.inbox size={17} />)}
-          {sections}
+          {sidebarTree}
         </div>
-        <div className="nodrag press" onClick={newPage} style={{ padding: '14px 18px calc(14px + env(safe-area-inset-bottom))', color: '#8f8e8a', cursor: 'pointer', fontSize: 14.5, boxShadow: 'inset 0 1px 0 #262626' }}>+ Ny side</div>
+        <div className="nodrag press" onClick={() => setSettings(true)} style={{ padding: '10px 18px', color: '#8f8e8a', cursor: 'pointer', fontSize: 14.5, boxShadow: 'inset 0 1px 0 #262626', display: 'flex', gap: 10, alignItems: 'center' }}>⚙️ Innstillinger</div>
+        <div className="nodrag press" onClick={() => newPage()} style={{ padding: '14px 18px calc(14px + env(safe-area-inset-bottom))', color: '#8f8e8a', cursor: 'pointer', fontSize: 14.5, boxShadow: 'inset 0 1px 0 #262626' }}>+ Ny side</div>
       </aside>
       <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
         <div className="drag" style={{ height: 44, flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 16px', marginTop: 'env(safe-area-inset-top)' }}>
@@ -346,22 +457,22 @@ export default function App() {
         </div>
         <div style={{ flex: '1 1 0', overflow: 'auto', paddingBottom: 60 }} onClick={() => slash !== null && setSlash(null)}>{content}</div>
         {menu && PageMenu}
+        {!ai && <div onClick={() => setAi(true)} title="Spør AI" style={{ position: 'absolute', right: 22, bottom: 22, width: 48, height: 48, borderRadius: '50%', ...glass, display: 'grid', placeItems: 'center', cursor: 'pointer', zIndex: 6 }}><Logo size={34} round /></div>}
         {ai && AiSheet}
         {toast && <div style={toastSt(30)}>{toast}</div>}
       </main>
+      {CtxMenu}{Picker}
       {settings && Settings}
+      <div ref={iconRef} style={{ display: 'none' }}><AppIcon variant={appIcon} size={64} /></div>
     </div>;
   }
 
   // ---------- mobile (iPhone / Android) ----------
-  const tabDefs = [['home', 'Hjem', Icon.home], ['ai', 'Chat', Icon.chat], ['cal', 'Kalender', Icon.cal], ['inbox', 'Innboks', Icon.inbox]];
   return <div style={{ position: 'fixed', inset: 0, background: '#191919', display: 'flex', flexDirection: 'column', paddingTop: 'env(safe-area-inset-top)' }}>
     {!isPg && screen !== 'search' && <div style={{ flex: 'none', display: 'flex', gap: 8, padding: '10px 14px 4px', alignItems: 'center' }}>
-      <div onClick={() => setSettings(true)} style={{ position: 'relative', width: 50, height: 50, flex: 'none', borderRadius: '50%', background: '#2a2a2a', boxShadow: 'inset 0 0 0 1px rgba(255,255,255,.06)', display: 'grid', placeItems: 'center', cursor: 'pointer' }}><Logo size={30} r={8} /><span style={{ position: 'absolute', top: 6, right: 6, width: 9, height: 9, borderRadius: '50%', background: '#eb5757', boxShadow: '0 0 0 2px #2a2a2a' }} /></div>
-      {tabDefs.map(([k, label, Ic]) => { const active = screen === k;
-        return <div key={k} onClick={() => k === 'ai' ? setAi(true) : (setScreen(k), setMenu(false))} style={{ position: 'relative', flex: active ? '1 1 auto' : '0 0 66px', height: 50, borderRadius: 25, background: active ? '#2f2f2f' : '#252525', boxShadow: 'inset 0 0 0 1px rgba(255,255,255,.05)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, cursor: 'pointer', minWidth: 50 }}>
-          <Ic />{active && <span style={{ fontSize: 17, fontWeight: 600 }}>{label}</span>}
-          {k === 'ai' && !msgs.length && <span style={{ position: 'absolute', top: 10, right: 13, width: 8, height: 8, borderRadius: '50%', background: '#eb5757' }} />}</div>; })}
+      <div onClick={() => setSettings(true)} style={{ position: 'relative', width: 50, height: 50, flex: 'none', borderRadius: '50%', background: '#2a2a2a', boxShadow: 'inset 0 0 0 1px rgba(255,255,255,.06)', display: 'grid', placeItems: 'center', cursor: 'pointer' }}><span style={{ borderRadius: 8, overflow: 'hidden', display: 'flex' }}><AppIcon variant={appIcon} size={30} /></span>{sync.status !== 'synket' && sync.auth.token && <span style={{ position: 'absolute', top: 6, right: 6, width: 9, height: 9, borderRadius: '50%', background: '#eb5757', boxShadow: '0 0 0 2px #2a2a2a' }} />}</div>
+      <div onClick={() => { setScreen('home'); setMenu(false); }} style={{ flex: '1 1 auto', height: 50, borderRadius: 25, background: screen === 'home' ? '#2f2f2f' : '#252525', boxShadow: 'inset 0 0 0 1px rgba(255,255,255,.05)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, cursor: 'pointer' }}>
+        <Icon.home /><span style={{ fontSize: 17, fontWeight: 600 }}>{screen === 'cal' ? 'Kalender' : screen === 'inbox' ? 'Innboks' : 'Hjem'}</span></div>
     </div>}
     {isPg && <div style={{ height: 60, flex: 'none' }} />}
     <div style={{ flex: '1 1 0', minHeight: 0, overflow: 'auto', paddingBottom: 140 }} onClick={() => slash !== null && setSlash(null)}>{content}</div>
@@ -377,11 +488,12 @@ export default function App() {
       <div style={{ position: 'absolute', left: 18, right: 18, bottom: 'calc(18px + env(safe-area-inset-bottom))', display: 'flex', gap: 10 }}>
         <div onClick={() => { setScreen('search'); setMenu(false); }} style={{ width: 58, height: 58, flex: 'none', borderRadius: '50%', ...glass, display: 'grid', placeItems: 'center', cursor: 'pointer' }}><Icon.search /></div>
         <div onClick={() => setAi(true)} style={{ flex: 1, height: 58, borderRadius: 29, ...glass, display: 'flex', alignItems: 'center', gap: 12, padding: '0 9px', cursor: 'pointer', minWidth: 0 }}><Logo size={40} round /><span style={{ fontSize: 17, color: '#8f8e8a' }}>Spør AI</span></div>
-        <div onClick={newPage} style={{ width: 58, height: 58, flex: 'none', borderRadius: '50%', ...glass, display: 'grid', placeItems: 'center', cursor: 'pointer' }}><Icon.write /></div>
+        <div onClick={() => newPage()} style={{ width: 58, height: 58, flex: 'none', borderRadius: '50%', ...glass, display: 'grid', placeItems: 'center', cursor: 'pointer' }}><Icon.write /></div>
       </div></>}
     {ai && AiSheet}
     {settings && Settings}
     {toast && <div style={toastSt(104)}>{toast}</div>}
+    <div ref={iconRef} style={{ display: 'none' }}><AppIcon variant={appIcon} size={64} /></div>
   </div>;
 }
 

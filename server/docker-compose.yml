@@ -22,6 +22,7 @@ services:
       OLLAMA_URL: ${OLLAMA_URL:-}
       OLLAMA_DEFAULT_MODEL: ${OLLAMA_DEFAULT_MODEL:-}
       ALLOW_SIGNUP: ${ALLOW_SIGNUP:-false}
+      MARG_SECRET: ${MARG_SECRET:?sett MARG_SECRET i .env}
     depends_on: [db]
 
   # Lar «Oppdater server» i appen hente ny kode og bygge tjenestene på nytt.
@@ -64,13 +65,13 @@ services:
     entrypoint: ["/bin/sh", "-c", "sleep 5; for m in ${OLLAMA_MODELS:-llama3.1:8b nomic-embed-text}; do ollama pull $$m; done"]
     restart: "no"
 
+  # Sikkerhetskopi til SMB-deling. Oppsett og tidsplan styres fra appen (Innstillinger → Sikkerhetskopi).
   backup:
-    image: pgvector/pgvector:pg16
+    build: { context: ., dockerfile: backup/Dockerfile }
     restart: unless-stopped
     environment:
-      PGPASSWORD: ${POSTGRES_PASSWORD}
-    volumes: [./backups:/backups]
-    entrypoint: ["/bin/sh", "-c", "while true; do pg_dump -h db -U marg marg | gzip > /backups/marg-$$(date +%F).sql.gz; find /backups -name '*.sql.gz' -mtime +14 -delete; sleep 86400; done"]
+      DATABASE_URL: postgres://marg:${POSTGRES_PASSWORD}@db:5432/marg
+      MARG_SECRET: ${MARG_SECRET}
     depends_on: [db]
 
 volumes:

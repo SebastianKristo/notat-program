@@ -8,3 +8,7 @@ body { color: #ebebe9; font-family: -apple-system, 'SF Pro Text', 'IBM Plex Sans
 .drag { -webkit-app-region: drag; }
 .nodrag, .drag span, .drag div[class~="nodrag"] { -webkit-app-region: no-drag; }
 input, button { -webkit-app-region: no-drag; }
+.tree-row .hover-show { visibility: hidden; }
+.tree-row:hover .hover-show { visibility: visible; }
+@media (hover: none) { .tree-row .hover-show { visibility: visible; } }
+select { color-scheme: dark; }

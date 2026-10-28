@@ -63,9 +63,10 @@ for _ in $(seq 1 30); do pct exec "$CTID" -- getent hosts deb.debian.org &>/dev/
 pct exec "$CTID" -- getent hosts deb.debian.org &>/dev/null || die "Containeren fikk ikke nettverk."
 
 PG_PASS=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32 || true)
+MARG_SECRET=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48 || true)
 
 msg "Installerer Docker og Marg (tar noen minutter) …"
-pct exec "$CTID" -- env REPO_URL="$REPO_URL" BRANCH="$BRANCH" GITHUB_TOKEN="$GITHUB_TOKEN" DOMAIN="${DOMAIN:-:80}" PG_PASS="$PG_PASS" bash -euo pipefail -c '
+pct exec "$CTID" -- env REPO_URL="$REPO_URL" BRANCH="$BRANCH" GITHUB_TOKEN="$GITHUB_TOKEN" DOMAIN="${DOMAIN:-:80}" PG_PASS="$PG_PASS" MARG_SECRET="$MARG_SECRET" bash -euo pipefail -c '
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq
   apt-get install -y -qq ca-certificates curl git >/dev/null
@@ -81,6 +82,7 @@ pct exec "$CTID" -- env REPO_URL="$REPO_URL" BRANCH="$BRANCH" GITHUB_TOKEN="$GIT
   cat > server/.env <<ENV
 DOMAIN=$DOMAIN
 POSTGRES_PASSWORD=$PG_PASS
+MARG_SECRET=$MARG_SECRET
 ALLOW_SIGNUP=false
 MARG_DIR=/opt/marg
 ENV
@@ -108,8 +110,8 @@ cat <<DONE
  ${GN}Ferdig!${CL}  Container $CTID ($CT_NAME) – $CT_IP
 
    Åpne Marg-appen → trykk M-logoen → serveradresse ${GN}$URL${CL} → Opprett konto.
-   Første konto blir administrator. Under Innstillinger setter du Ollama-adressen
-   (Mac mini) og oppdaterer serveren.
+   Første konto blir administrator. Under Innstillinger setter du opp Marg AI
+   (Ollama på Mac mini, Gemini, Claude), sikkerhetskopi til SMB og oppdaterer serveren.
 
    ${YW}Ollama på Mac-en må lytte på nettverket:${CL} launchctl setenv OLLAMA_HOST 0.0.0.0  (start Ollama på nytt)
 

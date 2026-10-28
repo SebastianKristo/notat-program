@@ -21,6 +21,8 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npx cap add android && npx cap sync android
+      - name: App icon
+        run: npx capacitor-assets generate --android --iconBackgroundColor '#1d1c1a' --iconBackgroundColorDark '#1d1c1a'
       - name: Allow http to self-hosted server
         run: sed -i '0,/<application/s//<application android:usesCleartextTraffic="true"/' android/app/src/main/AndroidManifest.xml
       - name: Build APK
@@ -39,6 +41,8 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npx cap add ios && npx cap sync ios
+      - name: App icon
+        run: npx capacitor-assets generate --ios --iconBackgroundColor '#1d1c1a'
       - name: Build unsigned IPA (iPhone + iPad)
         run: |
           /usr/libexec/PlistBuddy -c "Set :UIRequiresFullScreen false" ios/App/App/Info.plist || true
