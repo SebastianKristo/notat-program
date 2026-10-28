@@ -4,7 +4,12 @@ import fs from 'node:fs';
 import pg from 'pg';
 
 const PORT = +process.env.PORT || 3000;
-const OLLAMA = (process.env.OLLAMA_URL || 'http://ollama:11434').replace(/\/$/, '');
+const UPDATER = process.env.UPDATER_URL || 'http://updater:8080';
+// Innstillinger som kan endres fra appen. Miljøvariablene er bare startverdier.
+const settings = { ollama_url: process.env.OLLAMA_URL || '', default_model: process.env.OLLAMA_DEFAULT_MODEL || '' };
+const ollama = () => settings.ollama_url.replace(/\/$/, '');
+async function loadSettings() { for (const r of (await db.query('SELECT key, value FROM settings')).rows) if (r.key in settings) settings[r.key] = r.value; }
+const isAdmin = async uid => (await db.query('SELECT min(id) id FROM users')).rows[0].id === uid;
 const ALLOW_SIGNUP = process.env.ALLOW_SIGNUP === 'true';
 const HISTORY_EVERY_MS = 5 * 60 * 1000;
 const db = new pg.Pool({ connectionString: process.env.DATABASE_URL });
@@ -35,7 +40,7 @@ async function auth(req) {
 
 const routes = {
   'GET /api/health': async (req, res) => {
-    let ollama = false; try { ollama = (await fetch(OLLAMA + '/api/tags', { signal: AbortSignal.timeout(2000) })).ok; } catch {}
+    let ollama = false; try { ollama = (await fetch(ollama() + '/api/tags', { signal: AbortSignal.timeout(2000) })).ok; } catch {}
     const users = (await db.query('SELECT count(*)::int n FROM users')).rows[0].n;
     send(res, 200, { ok: true, ollama, signup: ALLOW_SIGNUP || users === 0 });
   },
@@ -99,8 +104,37 @@ const routes = {
     send(res, 200, r.rows);
   },
 
+  'GET /api/settings': async (req, res, uid) => {
+    let ollamaOk = false; try { ollamaOk = !!ollama() && (await fetch(ollama() + '/api/tags', { signal: AbortSignal.timeout(3000) })).ok; } catch {}
+    send(res, 200, { ...settings, ollama_ok: ollamaOk, admin: await isAdmin(uid) });
+  },
+
+  'PUT /api/settings': async (req, res, uid) => {
+    if (!(await isAdmin(uid))) return send(res, 403, { error: 'Bare administrator kan endre serverinnstillinger' });
+    const body = await readJson(req);
+    for (const k of Object.keys(settings)) if (typeof body[k] === 'string') {
+      settings[k] = body[k].trim();
+      await db.query('INSERT INTO settings(key, value) VALUES ($1,$2) ON CONFLICT (key) DO UPDATE SET value=$2', [k, settings[k]]);
+    }
+    audit(uid, 'settings', JSON.stringify(body));
+    send(res, 200, settings);
+  },
+
+  // Serveroppdatering går via updater-tjenesten, som har tilgang til Docker og git-repoet.
+  'GET /api/server/version': async (req, res, uid) => {
+    if (!(await isAdmin(uid))) return send(res, 403, { error: 'Bare administrator' });
+    try { send(res, 200, await (await fetch(UPDATER + '/status', { signal: AbortSignal.timeout(30000) })).json()); }
+    catch { send(res, 502, { error: 'Oppdateringstjenesten svarer ikke' }); }
+  },
+
+  'POST /api/server/update': async (req, res, uid) => {
+    if (!(await isAdmin(uid))) return send(res, 403, { error: 'Bare administrator' });
+    try { const r = await fetch(UPDATER + '/update', { method: 'POST' }); audit(uid, 'server_update', ''); send(res, r.status, await r.json()); }
+    catch { send(res, 502, { error: 'Oppdateringstjenesten svarer ikke' }); }
+  },
+
   'GET /api/models': async (req, res) => {
-    try { const r = await (await fetch(OLLAMA + '/api/tags')).json(); send(res, 200, (r.models || []).map(m => m.name)); }
+    try { const r = await (await fetch(ollama() + '/api/tags', { signal: AbortSignal.timeout(4000) })).json(); send(res, 200, (r.models || []).map(m => m.name)); }
     catch { send(res, 502, { error: 'Ollama svarer ikke' }); }
   },
 
@@ -109,14 +143,15 @@ const routes = {
     let { model = 'llama3.1:8b', prompt = '', context = {} } = await readJson(req);
     // Delt Ollama (f.eks. på en Mac mini) har ikke nødvendigvis modellen appen ber om.
     try {
-      const names = ((await (await fetch(OLLAMA + '/api/tags', { signal: AbortSignal.timeout(3000) })).json()).models || []).map(m => m.name);
-      if (names.length && !names.includes(model)) model = names.includes(process.env.OLLAMA_DEFAULT_MODEL) ? process.env.OLLAMA_DEFAULT_MODEL : names.find(n => !/embed/.test(n)) || names[0];
+      const names = ((await (await fetch(ollama() + '/api/tags', { signal: AbortSignal.timeout(3000) })).json()).models || []).map(m => m.name);
+      if (names.length && !names.includes(model)) model = names.includes(settings.default_model) ? settings.default_model : names.find(n => !/embed/.test(n)) || names[0];
     } catch {}
     const sys = 'Du er Marg, en hjelpsom assistent i en notatapp. Svar kort og på norsk.';
     const ctx = context.text ? `\n\nSiden brukeren har åpen:\n"""\n${String(context.text).slice(0, 12000)}\n"""` : '';
     let up;
     try {
-      up = await fetch(OLLAMA + '/api/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      if (!ollama()) return send(res, 503, { error: 'Ollama er ikke satt opp. Legg inn adressen i Innstillinger.' });
+      up = await fetch(ollama() + '/api/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model, system: sys + ctx, prompt, stream: true }) });
     } catch { return send(res, 502, { error: 'Ollama svarer ikke' }); }
     if (!up.ok) return send(res, 502, { error: `Ollama: ${await up.text()}` });
@@ -148,4 +183,4 @@ http.createServer(async (req, res) => {
     console.error(e);
     if (!res.headersSent) send(res, 500, { error: 'Serverfeil' }); else res.end();
   }
-}).listen(PORT, async () => { await migrate(); console.log(`Marg API på :${PORT}`); });
+}).listen(PORT, async () => { await migrate(); await loadSettings(); console.log(`Marg API på :${PORT}`); });

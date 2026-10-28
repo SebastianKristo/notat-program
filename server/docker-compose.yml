@@ -1,10 +1,12 @@
+name: marg
+
 services:
   caddy:
     image: caddy:2
     restart: unless-stopped
     ports: ["80:80", "443:443"]
     environment:
-      DOMAIN: ${DOMAIN:-notes.kristo.no}
+      DOMAIN: ${DOMAIN:-:80}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ../dist:/srv/web:ro
@@ -17,10 +19,20 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://marg:${POSTGRES_PASSWORD:?sett POSTGRES_PASSWORD i .env}@db:5432/marg
-      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+      OLLAMA_URL: ${OLLAMA_URL:-}
       OLLAMA_DEFAULT_MODEL: ${OLLAMA_DEFAULT_MODEL:-}
       ALLOW_SIGNUP: ${ALLOW_SIGNUP:-false}
     depends_on: [db]
+
+  # Lar «Oppdater server» i appen hente ny kode og bygge tjenestene på nytt.
+  updater:
+    build: ./updater
+    restart: unless-stopped
+    environment:
+      MARG_DIR: ${MARG_DIR:-/opt/marg}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${MARG_DIR:-/opt/marg}:${MARG_DIR:-/opt/marg}
 
   db:
     image: pgvector/pgvector:pg16

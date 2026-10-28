@@ -31,3 +31,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
   detail TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);

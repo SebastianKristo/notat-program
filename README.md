@@ -16,28 +16,27 @@ GitHub Actions (`.github/workflows/release.yml`) bygger APK, IPA og DMG på hver
 
 ## Backend (Docker Compose)
 
-`server/` inneholder API (Node + Postgres/pgvector), Caddy for HTTPS og nattlig `pg_dump`-backup. AI går mot en Ollama du allerede har (f.eks. på en Mac mini) via `OLLAMA_URL` i `.env`. Vil du heller kjøre Ollama i Docker: `docker compose --profile ollama up -d`.
+`server/` inneholder API (Node + Postgres/pgvector), Caddy, nattlig `pg_dump`-backup og en oppdateringstjeneste.
 
 ```bash
 npm install && npm run build      # web-klienten serveres også av Caddy fra ../dist
 cd server
-cp .env.example .env              # sett DOMAIN og POSTGRES_PASSWORD
+cp .env.example .env              # sett POSTGRES_PASSWORD (og evt. DOMAIN for HTTPS)
 docker compose up -d --build
 ```
 
-- Pek DNS for `DOMAIN` mot serveren; Caddy henter TLS-sertifikat automatisk.
-- Ollama på Mac-en må lytte på nettverket: `launchctl setenv OLLAMA_HOST 0.0.0.0` og start Ollama på nytt. Appen viser modellene som finnes der.
-- Første bruker kan registrere seg fra appen (M-logoen → Opprett konto). Deretter er registrering stengt, med mindre `ALLOW_SIGNUP=true`.
-- Endepunkter: `/api/health`, `/api/register`, `/api/login`, `/api/logout`, `/api/workspace` (GET/PUT med versjonskontroll), `/api/history`, `/api/models`, `/api/ai` (strømmer fra Ollama).
+Alt annet gjøres i appen under **Innstillinger** (trykk M-logoen). Første konto blir administrator.
+- **AI (Ollama):** adressen til Ollama (f.eks. Mac mini på `http://mac-mini.local:11434`) og standardmodell. Ollama må lytte på nettverket: `launchctl setenv OLLAMA_HOST 0.0.0.0`.
+- **Serverapplikasjon:** viser versjon og nye endringer, og «Oppdater server» henter siste kode og bygger tjenestene på nytt.
+
+Vil du heller kjøre Ollama i Docker: `docker compose --profile ollama up -d` og bruk `http://ollama:11434` i innstillingene.
 
 ## Proxmox
 
-Kjør på Proxmox-verten som root. Skriptet lager en Debian 12 LXC med Docker, bygger appen og starter hele backenden:
+Kjør på Proxmox-verten som root. Ingen spørsmål – ID, lagring, nettverk (DHCP) og passord velges automatisk:
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/SebastianKristo/notat-program/HEAD/scripts/proxmox-install.sh)"
 ```
 
-Er repoet privat, kopier `scripts/proxmox-install.sh` til verten og kjør `GITHUB_TOKEN=<token> bash proxmox-install.sh`.
-Alle spørsmål kan forhåndsutfylles med miljøvariabler (`CTID`, `DOMAIN`, `RAM_MB`, `DISK_GB`, `IP`, `MODELS` …).
-Oppdatering senere: `pct exec <CTID> -- marg-update`.
+Skriptet skriver ut adressen (`http://<ip>`) til slutt. Valgfrie overstyringer: `CTID`, `IP`, `DOMAIN`, `RAM_MB`, `DISK_GB`, `STORAGE`, `BRANCH`, `GITHUB_TOKEN` (privat repo).

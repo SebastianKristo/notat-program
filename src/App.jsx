@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { C, ST, ORDER, MODELS as DEFAULT_MODELS, EVENTS, INBOX, BLOCK_TYPES, seedPages, seedRows, seedRecent, seedPrivate } from './data.js';
 import { Icon, Logo } from './icons.jsx';
 import { useSync } from './sync.js';
+import ServerSettings from './ServerSettings.jsx';
 
 const KEY = 'marg:v1';
 const load = () => { try { return JSON.parse(localStorage.getItem(KEY)) || null; } catch { return null; } };
@@ -292,14 +293,16 @@ export default function App() {
   </div>;
 
   const Settings = <div onClick={e => e.target === e.currentTarget && setSettings(false)} style={{ position: 'absolute', inset: 0, zIndex: 25, background: 'rgba(0,0,0,.5)', display: 'grid', placeItems: 'center', padding: 20 }}>
-    <div style={{ width: '100%', maxWidth: 420, background: '#202020', borderRadius: 16, padding: 22, boxShadow: 'inset 0 0 0 1px #2c2c2c' }}>
+    <div style={{ width: '100%', maxWidth: 420, maxHeight: '88vh', overflow: 'auto', boxSizing: 'border-box', background: '#202020', borderRadius: 16, padding: 22, boxShadow: 'inset 0 0 0 1px #2c2c2c' }}>
       <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 16 }}>Innstillinger</div>
       <div style={{ fontSize: 13.5, color: '#8f8e8a', marginBottom: 6 }}>Serveradresse</div>
       <input value={data.server} onChange={e => setData(d => ({ ...d, server: e.target.value }))} style={{ width: '100%', boxSizing: 'border-box', height: 42, borderRadius: 10, border: 0, background: '#2a2a2a', color: '#ebebe9', padding: '0 12px', font: 'inherit', fontFamily: 'ui-monospace,monospace', fontSize: 14 }} />
-      <div style={{ fontSize: 13, color: '#6f6e6a', margin: '8px 0 14px' }}>Notater lagres lokalt og synkes til serveren når du er logget inn. AI kjører i Ollama på serveren.</div>
+      <div style={{ fontSize: 13, color: '#6f6e6a', margin: '8px 0 14px' }}>Notater lagres lokalt og synkes til serveren når du er logget inn.</div>
       {sync.auth.token ? <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18, fontSize: 14.5 }}>
         <span>{sync.auth.email} · <span style={{ color: sync.status === 'synket' ? '#7fc495' : '#e3b665' }}>{sync.status}</span></span>
         <button onClick={sync.logout} style={btn('#2a2a2a', '#ebebe9')}>Logg ut</button></div>
+      : null}
+      {sync.auth.token ? <ServerSettings server={data.server} authHeader={sync.authHeader} toast={showToast} onModels={m => { const chat = m.filter(n => !/embed/.test(n)); if (chat.length) setModels(chat); }} />
       : <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 18 }}>
         {['email', 'password'].map(k => <input key={k} type={k} placeholder={k === 'email' ? 'E-post' : 'Passord'} value={cred[k]} onChange={e => setCred(c => ({ ...c, [k]: e.target.value }))} style={{ height: 42, borderRadius: 10, border: 0, background: '#2a2a2a', color: '#ebebe9', padding: '0 12px', font: 'inherit', fontSize: 15 }} />)}
         {cred.err && <div style={{ color: '#ec8c8c', fontSize: 13.5 }}>{cred.err}</div>}

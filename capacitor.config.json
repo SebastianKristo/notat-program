@@ -3,5 +3,6 @@
   "appName": "Marg",
   "webDir": "dist",
   "backgroundColor": "#191919",
-  "ios": { "contentInset": "never" }
+  "ios": { "contentInset": "never" },
+  "android": { "allowMixedContent": true }
 }
