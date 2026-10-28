@@ -5,6 +5,7 @@ import pg from 'pg';
 import { encrypt, decrypt } from './secret.js';
 import { createAI } from './ai.js';
 import { createFeatures, checkTotp } from './features.js';
+import { createCollab } from './collab.js';
 
 const PORT = +process.env.PORT || 3000;
 const UPDATER = process.env.UPDATER_URL || 'http://updater:8080';
@@ -18,9 +19,10 @@ const settings = {
   fallback: 'ollama', private_local: 'true',
   smb_host: '', smb_path: 'marg', smb_user: '', smb_pass: '', smb_domain: 'WORKGROUP', smb_version: 'SMB3',
   bk_schedule: 'nightly', bk_keep: '30', bk_encrypt: 'true', bk_key: '',
-  whisper_url: process.env.WHISPER_URL || '', whisper_lang: 'no', ical_urls: '', workspace_name: 'Marg', allow_guests: 'false'
+  whisper_url: process.env.WHISPER_URL || '', whisper_lang: 'no', ical_urls: '', workspace_name: 'Marg', allow_guests: 'false',
+  oidc_name: 'Authentik', oidc_issuer: '', oidc_client_id: '', oidc_client_secret: '', oidc_auto_create: 'false', public_url: ''
 };
-const SECRET = new Set(['gemini_key', 'claude_key', 'smb_pass', 'bk_key']);
+const SECRET = new Set(['gemini_key', 'claude_key', 'smb_pass', 'bk_key', 'oidc_client_secret']);
 async function loadSettings() {
   for (const r of (await db.query('SELECT key, value FROM settings')).rows) if (r.key in settings) settings[r.key] = SECRET.has(r.key) ? decrypt(r.value) : r.value;
 }
@@ -219,6 +221,9 @@ const PUBLIC = new Set(['GET /api/health', 'POST /api/register', 'POST /api/logi
 
 features = createFeatures({ db, send, readJson, audit, isAdmin, hash, verify, settings, saveSetting, cors });
 Object.assign(routes, features.routes);
+const collab = createCollab({ db, send, readJson, audit, isAdmin, settings, saveWs: features.saveWs, workspace: features.workspace, FILES: features.FILES, cors, hash });
+Object.assign(routes, collab.routes);
+collab.publicKeys.forEach(k => PUBLIC.add(k));
 
 http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') { res.writeHead(204, cors); return res.end(); }

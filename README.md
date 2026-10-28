@@ -36,7 +36,10 @@ Alt annet gjøres i appen under **Innstillinger** (profilknappen / ⚙️). Før
 - **Marg MCP:** API-nøkler og MCP-endepunkt på `/api/mcp` for Claude og andre klienter.
 - **Tilkoblinger:** webhooks med HMAC-signatur når sider endres.
 - **E-post og kalender:** ICS-abonnement som vises i Kalender.
-- **Import/eksport:** Notion-ZIP, Obsidian-hvelv, Markdown og JSON inn; Markdown-ZIP, JSON og PDF ut.
+- **Import/eksport:** Notion-ZIP, Notion API, Obsidian-hvelv, Markdown og JSON inn; Markdown-ZIP, JSON og PDF ut.
+- **Deling:** inviter andre på serveren til en side (kan lese / kan redigere). Den vises under «Delt med meg» hos dem, og endringer lagres rett på eierens side.
+- **SSO:** OpenID Connect (Authentik, Keycloak, Google …) under Innstillinger → Sikkerhet. Redirect-adresse: `<server>/api/sso/callback`.
+- **Appikon:** Ark, Krystall eller Marg på hjemskjermen (iOS/Android) og i Dock (Mac).
 
 Vil du heller kjøre Ollama i Docker: `docker compose --profile ollama up -d` og bruk `http://ollama:11434` i innstillingene.
 

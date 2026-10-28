@@ -1,11 +1,11 @@
-const { app, BrowserWindow, shell } = require('electron');
+const { app, BrowserWindow, shell, ipcMain, nativeImage } = require('electron');
 const path = require('path');
 
 function createWindow() {
   const win = new BrowserWindow({
     width: 1280, height: 820, minWidth: 380, minHeight: 600,
     backgroundColor: '#191919', titleBarStyle: 'hiddenInset', title: 'Marg',
-    webPreferences: { contextIsolation: true }
+    webPreferences: { contextIsolation: true, preload: path.join(__dirname, 'preload.cjs') }
   });
   win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
   // Egne sider (nytt vindu, utskrift) åpnes i appen; alt annet i nettleseren
@@ -14,6 +14,9 @@ function createWindow() {
     shell.openExternal(url); return { action: 'deny' };
   });
 }
+
+// Appikonet brukeren velger i Innstillinger → Utseende
+ipcMain.on('dock-icon', (_e, dataUrl) => { if (app.dock) app.dock.setIcon(nativeImage.createFromDataURL(dataUrl)); });
 
 app.whenReady().then(() => {
   createWindow();

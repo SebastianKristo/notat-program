@@ -24,7 +24,23 @@ const Line = ({ label, desc, children }) => <div style={{ display: 'flex', gap: 
   <div style={{ flex: 1 }}><div style={{ fontSize: 14.5, fontWeight: 500 }}>{label}</div>{desc && <div style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 2 }}>{desc}</div>}</div>{children}</div>;
 
 // ---------- Del og publiser ----------
-export function ShareModal({ page, pageId, server, onClose, toast, onLock }) {
+function Invite({ pageId, toast }) {
+  const [list, setList] = useState(null), [email, setEmail] = useState(''), [role, setRole] = useState('edit');
+  const load = () => post('/api/shares/list', { pageId }).then(setList).catch(() => setList([]));
+  useEffect(() => { load(); }, []);
+  return <div style={{ marginBottom: 18 }}>
+    <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>Inviter personer på serveren</div>
+    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+      <input value={email} onChange={e => setEmail(e.target.value)} placeholder="E-post" style={{ ...field, flex: 1, minWidth: 160 }} />
+      <select value={role} onChange={e => setRole(e.target.value)} style={{ ...field, width: 'auto' }}><option value="edit">Kan redigere</option><option value="read">Kan lese</option></select>
+      <button style={btn('var(--text)', 'var(--bg)')} onClick={() => post('/api/shares', { pageId, email, role }).then(() => { setEmail(''); load(); toast('Delt'); }).catch(e => toast(e.message))}>Inviter</button></div>
+    {(list || []).map(m => <div key={m.member_id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0', borderTop: '1px solid var(--line)', fontSize: 14 }}>
+      <span style={{ flex: 1 }}>{m.email}</span><span style={{ color: 'var(--muted)' }}>{m.role === 'read' ? 'Kan lese' : 'Kan redigere'}</span>
+      <span onClick={() => post('/api/shares/remove', { pageId, memberId: m.member_id }).then(load)} style={{ cursor: 'pointer', color: 'var(--faint)' }}>×</span></div>)}
+  </div>;
+}
+
+export function ShareModal({ page, pageId, server, onClose, toast, onLock, sharedFrom }) {
   const [pub, setPub] = useState(undefined);
   const [f, setF] = useState({ slug: (page.title || '').toLowerCase().replace(/[^a-z0-9æøå]+/g, '-').replace(/^-|-$/g, '').slice(0, 40), password: '', indexable: false, expiresDays: 0 });
   const base = server.replace(/\/$/, '');
@@ -33,7 +49,9 @@ export function ShareModal({ page, pageId, server, onClose, toast, onLock }) {
   const url = pub ? `${base}/p/${pub.slug}` : '';
   const publish = () => post('/api/publish', { pageId, slug: f.slug, password: f.password, indexable: f.indexable, expiresDays: +f.expiresDays || null }).then(() => { load(); toast('Publisert'); }).catch(e => toast(e.message));
   return <Modal title="Del og publiser" onClose={onClose}>
-    {!loggedIn() ? needLogin : pub === undefined ? <div style={{ color: 'var(--muted)' }}>Henter …</div> : <>
+    {loggedIn() && sharedFrom && <div style={{ fontSize: 14, color: 'var(--muted)', marginBottom: 14 }}>Delt med deg av {sharedFrom.owner} ({sharedFrom.role === 'read' ? 'kan lese' : 'kan redigere'}). Bare eieren kan dele og publisere siden.</div>}
+    {loggedIn() && !sharedFrom && <Invite pageId={pageId} toast={toast} />}
+    {!loggedIn() ? needLogin : sharedFrom ? null : pub === undefined ? <div style={{ color: 'var(--muted)' }}>Henter …</div> : <>
       {pub && <div style={{ background: 'var(--green-bg)', color: 'var(--green-fg)', borderRadius: 8, padding: '10px 12px', marginBottom: 14, fontSize: 14, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>● Publisert på <a href={url} target="_blank" rel="noreferrer" style={{ color: 'inherit' }}>{url}</a>{pub.protected ? ' · passord' : ''}</span>
         <button style={btn()} onClick={() => { navigator.clipboard?.writeText(url); toast('Lenke kopiert'); }}>Kopier lenke</button></div>}
@@ -134,25 +152,39 @@ export function Comments({ comments = [], me, onChange, onClose, wide }) {
 
 // ---------- AI-møtenotater ----------
 export function MeetingModal({ onClose, onDone, ask, toast }) {
-  const [st, setSt] = useState('idle'), [secs, setSecs] = useState(0), [text, setText] = useState(''), [err, setErr] = useState('');
-  const rec = useRef(), chunks = useRef([]), timer = useRef();
-  useEffect(() => () => { clearInterval(timer.current); rec.current?.stream?.getTracks().forEach(t => t.stop()); }, []);
+  const [st, setSt] = useState('idle'), [secs, setSecs] = useState(0), [text, setText] = useState(''), [err, setErr] = useState(''), [pendingN, setPendingN] = useState(0);
+  const stream = useRef(), rec = useRef(), timer = useRef(), seg = useRef(), queue = useRef(Promise.resolve()), active = useRef(false);
+  useEffect(() => () => { active.current = false; clearInterval(timer.current); clearTimeout(seg.current); stream.current?.getTracks().forEach(t => t.stop()); }, []);
+  // Hver bit på ~20 s er en egen lydfil, så whisper kan skrive mens møtet pågår
+  const transcribe = blob => {
+    setPendingN(n => n + 1);
+    queue.current = queue.current.then(async () => {
+      try { const r = await api('/api/transcribe', { method: 'POST', headers: { 'Content-Type': blob.type || 'audio/webm' }, body: blob }); if (r.text) setText(t => (t ? t + ' ' : '') + r.text); }
+      catch (e) { setErr(e.message); }
+      setPendingN(n => n - 1);
+    });
+  };
+  const segment = () => {
+    if (!active.current) return;
+    const r = new MediaRecorder(stream.current), chunks = [];
+    r.ondataavailable = e => e.data.size && chunks.push(e.data);
+    r.onstop = () => { if (chunks.length) transcribe(new Blob(chunks, { type: r.mimeType })); };
+    r.start(); rec.current = r;
+    seg.current = setTimeout(() => { if (r.state === 'recording') r.stop(); segment(); }, 20000);
+  };
   const start = async () => {
     setErr('');
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const r = new MediaRecorder(stream); chunks.current = [];
-      r.ondataavailable = e => chunks.current.push(e.data); r.onstop = () => { stream.getTracks().forEach(t => t.stop()); transcribe(new Blob(chunks.current, { type: r.mimeType })); };
-      r.start(1000); rec.current = r; setSt('rec'); setSecs(0); timer.current = setInterval(() => setSecs(s => s + 1), 1000);
-    } catch { setErr('Fikk ikke tilgang til mikrofonen'); }
+    try { stream.current = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+    catch { return setErr('Fikk ikke tilgang til mikrofonen'); }
+    active.current = true; setSt('rec'); setSecs(0); setText('');
+    timer.current = setInterval(() => setSecs(s => s + 1), 1000); segment();
   };
-  const stop = () => { clearInterval(timer.current); rec.current?.stop(); setSt('busy'); };
-  const transcribe = async blob => {
-    try {
-      setText('Transkriberer med whisper på serveren …');
-      const r = await api('/api/transcribe', { method: 'POST', headers: { 'Content-Type': blob.type || 'audio/webm' }, body: blob });
-      setText(r.text); setSt('done');
-    } catch (e) { setErr(e.message); setSt('idle'); setText(''); }
+  const stop = async () => {
+    active.current = false; clearInterval(timer.current); clearTimeout(seg.current);
+    if (rec.current?.state === 'recording') rec.current.stop();
+    setSt('busy');
+    await new Promise(r => setTimeout(r, 300)); await queue.current;
+    stream.current?.getTracks().forEach(t => t.stop()); setSt('done');
   };
   const summarize = async () => {
     setSt('ai');
@@ -167,14 +199,14 @@ export function MeetingModal({ onClose, onDone, ask, toast }) {
     {!loggedIn() ? needLogin : <>
       <div style={{ textAlign: 'center', padding: '10px 0 16px' }}>
         <div style={{ fontSize: 40, fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}>{mm}</div>
-        <div style={{ fontSize: 13.5, color: st === 'rec' ? '#eb5757' : 'var(--muted)', margin: '4px 0 14px' }}>{st === 'rec' ? '● Tar opp' : st === 'busy' ? 'Transkriberer …' : st === 'ai' ? 'Lager sammendrag …' : st === 'done' ? 'Ferdig transkribert' : 'Klar'}</div>
+        <div style={{ fontSize: 13.5, color: st === 'rec' ? '#eb5757' : 'var(--muted)', margin: '4px 0 14px' }}>{st === 'rec' ? `● Tar opp · live transkripsjon${pendingN ? ' (skriver …)' : ''}` : st === 'busy' ? 'Transkriberer siste del …' : st === 'ai' ? 'Lager sammendrag …' : st === 'done' ? 'Ferdig transkribert' : 'Klar'}</div>
         {st === 'idle' && <button style={btn('#eb5757', '#fff')} onClick={start}>🎙️ Start opptak</button>}
         {st === 'rec' && <button style={btn('var(--text)', 'var(--bg)')} onClick={stop}>■ Stopp</button>}
         {st === 'done' && <button style={btn('var(--text)', 'var(--bg)')} onClick={summarize}>✦ Lag sammendrag, beslutninger og gjøremål</button>}
       </div>
       {err && <div style={{ color: 'var(--red-fg)', fontSize: 13.5, marginBottom: 10 }}>{err}</div>}
-      {text && <textarea value={text} onChange={e => setText(e.target.value)} rows={8} style={{ ...field, height: 'auto', padding: 10, resize: 'vertical' }} />}
-      <div style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 10 }}>Opptaket sendes til whisper på serveren din når du stopper (Innstillinger → Møtenotater). Ingenting går ut av nettverket med mindre du har valgt Gemini eller Claude for sammendraget.</div>
+      {(text || st === 'rec') && <textarea value={text} placeholder="Teksten dukker opp her etter ca. 20 sekunder …" onChange={e => setText(e.target.value)} rows={8} style={{ ...field, height: 'auto', padding: 10, resize: 'vertical' }} />}
+      <div style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 10 }}>Opptaket sendes i biter til whisper på serveren din mens du snakker (Innstillinger → Møtenotater). Ingenting går ut av nettverket med mindre du har valgt Gemini eller Claude for sammendraget.</div>
     </>}
   </Modal>;
 }

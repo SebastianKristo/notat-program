@@ -10,6 +10,7 @@ import { useSync } from './sync.js';
 import SettingsView from './SettingsView.jsx';
 import EmojiPicker from './EmojiPicker.jsx';
 import { AppIcon } from './appicons.jsx';
+import { applyNativeIcon } from './nativeIcon.js';
 
 const KEY = 'marg:v1';
 const load = () => { try { return JSON.parse(localStorage.getItem(KEY)) || null; } catch { return null; } };
@@ -86,6 +87,8 @@ export default function App() {
   const [calEvents, setCalEvents] = useState([]);
   const [weekStart, setWeekStart] = useState(() => { const d = new Date(); d.setDate(d.getDate() - (d.getDay() + 6) % 7); return isoDay(d); });
   const [selDay, setSelDay] = useState(() => isoDay(new Date()));
+  const [sharedMap, setSharedMap] = useState(null);
+  const [syncedPick, setSyncedPick] = useState(null);
   const [closed, setClosed] = useState({ Nylig: true });
   const [tog, setTog] = useState({});
   const [ai, setAi] = useState(false);
@@ -102,6 +105,19 @@ export default function App() {
   const tt = useRef(); const msgRef = useRef();
   const sync = useSync(data, setData);
   configureApi(data.server, sync.authHeader);
+  useEffect(() => {
+    if (!sync.auth.token) { setSharedMap(null); return; }
+    const load = () => api('/api/shared').then(list => {
+      setSharedMap(m => Object.fromEntries(list.map(x => { const id = `s:${x.ownerId}:${x.pageId}`, mine = m?.[id];
+        // ikke overskriv en side du holder på å redigere
+        return [id, mine && Date.now() - (mine.t || 0) < 5000 ? mine : { ...x.page, parent: undefined, fav: undefined, trashed: undefined, locked: x.role === 'read' || x.page.locked, shared: { ownerId: x.ownerId, pageId: x.pageId, owner: x.owner, role: x.role } }]; })));
+      let seen = []; try { seen = JSON.parse(localStorage.getItem('marg:sharedSeen') || '[]'); } catch {}
+      const fresh = list.filter(x => !seen.includes(`${x.ownerId}:${x.pageId}`));
+      if (fresh.length && seen.length + fresh.length > fresh.length) fresh.forEach(x => addInbox({ a: x.owner[0].toUpperCase(), c: '#7a5cc7', who: x.owner, t: `delte «${x.page.title || 'Uten tittel'}» med deg`, page: 'Delt med meg', id: `s:${x.ownerId}:${x.pageId}` }));
+      try { localStorage.setItem('marg:sharedSeen', JSON.stringify(list.map(x => `${x.ownerId}:${x.pageId}`))); } catch {}
+    }).catch(() => {});
+    load(); const t = setInterval(load, 30000); return () => clearInterval(t);
+  }, [sync.auth.token, data.server]);
   // Modeller fra serveren som "leverandør:modell". Tom streng = serverens standardmodell.
   const [MODELS, setModels] = useState(['']);
   useEffect(() => {
@@ -122,13 +138,15 @@ export default function App() {
     const svg = iconRef.current?.innerHTML; if (!svg) return;
     let l = document.querySelector('link[rel=icon]'); if (!l) { l = document.createElement('link'); l.rel = 'icon'; document.head.appendChild(l); }
     l.href = 'data:image/svg+xml,' + encodeURIComponent(svg.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"'));
+    applyNativeIcon(appIcon, svg, false);
   }, [appIcon]);
 
   useEffect(() => { try { localStorage.setItem(KEY, JSON.stringify(data)); } catch { /* full */ } }, [data]);
   useEffect(() => { if (msgRef.current) msgRef.current.scrollTop = msgRef.current.scrollHeight; }, [msgs, ai]);
 
   const showToast = t => { clearTimeout(tt.current); setToastS(t); tt.current = setTimeout(() => setToastS(null), 2200); };
-  const pages = data.pages, page = pages[pageId] || pages.velkommen || Object.values(pages)[0];
+  // Sider andre har delt med deg ligger under nøkkelen «s:<eier>:<side>» og lagres rett på eierens arbeidsområde
+  const pages = sharedMap ? { ...data.pages, ...sharedMap } : data.pages, page = pages[pageId] || pages.velkommen || Object.values(pages)[0];
   const isPg = screen === 'page' || screen === 'db';
   const alive = id => pages[id] && !pages[id].trashed;
   const sortIds = ids => prefs.sort === 'alpha' ? [...ids].sort((a, b) => (pages[a].title || '').localeCompare(pages[b].title || '', 'nb'))
@@ -149,7 +167,17 @@ export default function App() {
     setData(d => ({ ...d, inbox: [{ key: uid(), a: '⚡', c: 'var(--s6)', when: new Date().toISOString(), read: false, ...item }, ...(d.inbox || [])].slice(0, 200) }));
     if (prefs.notifyDesktop && 'Notification' in window && Notification.permission === 'granted') new Notification('Marg', { body: `${item.who} ${item.t}` });
   };
-  const updPage = (id, f) => setData(d => ({ ...d, pages: { ...d.pages, [id]: { ...f(d.pages[id]), t: Date.now() } } }));
+  const sharedTimers = useRef({});
+  const updPage = (id, f) => {
+    if (id.startsWith('s:')) {
+      setSharedMap(m => { const next = { ...m[id], ...f(m[id]), t: Date.now() };
+        clearTimeout(sharedTimers.current[id]);
+        sharedTimers.current[id] = setTimeout(() => { const { shared, ...page } = next; api('/api/shared/save', { method: 'POST', body: JSON.stringify({ ownerId: shared.ownerId, pageId: shared.pageId, page }) }).catch(e => showToast(e.message)); }, 900);
+        return { ...m, [id]: next }; });
+      return;
+    }
+    setData(d => ({ ...d, pages: { ...d.pages, [id]: { ...f(d.pages[id]), t: Date.now() } } }));
+  };
   const updBlock = (i, patch) => updPage(pageId, p => ({ ...p, blocks: p.blocks.map((b, j) => j === i ? { ...b, ...patch } : b) }));
   const insertBlock = (i, b) => { updPage(pageId, p => { const bl = [...p.blocks]; bl.splice(i, 0, b); return { ...p, blocks: bl }; }); setFocus(b.id); };
   const removeBlock = i => updPage(pageId, p => ({ ...p, blocks: p.blocks.filter((_, j) => j !== i) }));
@@ -295,16 +323,18 @@ export default function App() {
       <span onClick={() => setClosed(c => ({ ...c, [name]: op }))} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: wide ? 12.5 : 15, fontWeight: 600, color: 'var(--muted)', cursor: 'pointer' }}>{name} <span style={{ fontSize: 11, transform: op ? 'none' : 'rotate(-90deg)', display: 'inline-block' }}>⌄</span></span>
       {extra}
     </div>; };
-  const roots = sortIds(Object.keys(pages).filter(k => !pages[k].parent && !pages[k].trashed));
+  const roots = sortIds(Object.keys(pages).filter(k => !pages[k].parent && !pages[k].trashed && !pages[k].shared));
   const favs = Object.keys(pages).filter(k => pages[k].fav && !pages[k].trashed);
+  const sharedIds = Object.keys(sharedMap || {});
   const trashCount = Object.values(pages).filter(p => p.trashed).length;
   const sidebarTree = <>
     {prefs.sbFav && favs.length > 0 && <div>{sectionHead('Favoritter')}{!closed.Favoritter && favs.map(id => treeRow(id))}</div>}
     {prefs.sbRecent && <div>{sectionHead('Nylig')}{!closed.Nylig && data.recent.filter(alive).slice(0, 6).map(id => treeRow(id))}</div>}
     <div>{sectionHead('Sider', <span onClick={() => newPage()} style={{ color: 'var(--muted)', fontSize: 18, cursor: 'pointer' }}>+</span>, dropZone('Sider', id => setParent(id, null)))}
       {!closed.Sider && roots.map(id => treeRow(id))}</div>
+    {sharedIds.length > 0 && <div>{sectionHead('Delt med meg')}{!closed['Delt med meg'] && sharedIds.map(id => treeRow(id))}</div>}
   </>;
-  const sections = [['Nylige', data.recent.filter(alive)], ['Privat', sortIds(data.priv.filter(id => alive(id) && !pages[id]?.parent))]].map(([name, ids]) =>
+  const sections = [['Nylige', data.recent.filter(alive)], ['Privat', sortIds(data.priv.filter(id => alive(id) && !pages[id]?.parent))], ...(sharedIds.length ? [['Delt med meg', sharedIds]] : [])].map(([name, ids]) =>
     <div key={name}>{sectionHead(name, name === 'Privat' && <span onClick={() => newPage()} style={{ color: 'var(--muted)', fontSize: 18, cursor: 'pointer' }}>+</span>)}
       {!closed[name] && ids.filter(id => pages[id]).map(row)}</div>);
 
@@ -319,6 +349,14 @@ export default function App() {
   const pill = (v, c) => <span style={{ fontSize: 14, padding: '3px 9px', borderRadius: 5, background: C[c]?.bg, color: C[c]?.fg }}>{v}</span>;
 
   const locked = !!page.locked;
+  const runButton = (b, i) => {
+    if (b.action === 'todo') { insertBlock(i + 1, { id: uid(), type: 'todo', text: '', done: false }); return; }
+    if (b.action === 'ai') { setAi(true); return; }
+    if (b.action === 'template') { const t = (data.templates || []).find(x => x.id === b.tpl); t ? fromTemplate(t, pageId.startsWith('s:') ? null : pageId) : showToast('Velg en mal for knappen'); return; }
+    if (b.action === 'day') { const id = 'p' + uid(), title = new Date().toLocaleDateString('nb-NO', { weekday: 'long', day: 'numeric', month: 'long' });
+      setData(d => ({ ...d, pages: { ...d.pages, [id]: { icon: '📓', title: title[0].toUpperCase() + title.slice(1), props: [], blocks: [{ id: uid(), type: 'p', text: '' }], parent: pageId.startsWith('s:') ? null : pageId, t: Date.now() } } }));
+      setExp(e => ({ ...e, [pageId]: true })); open(id); }
+  };
   const onBlockKey = (i, b) => e => {
     if (locked) return;
     if (e.key === 'Enter' && (prefs.enterNewBlock ? !e.shiftKey : e.shiftKey) && b.type !== 'math') {
@@ -353,6 +391,19 @@ export default function App() {
         <div style={{ display: 'flex', gap: 10, fontSize: 17, lineHeight: 1.55 }}><span onClick={() => setTog(t => ({ ...t, [key]: !open_ }))} style={{ cursor: 'pointer', color: 'var(--muted2)', width: 14 }}>{open_ ? '▾' : '▸'}</span>{ed({ fontWeight: 500 }, 'Utvidbar liste')}</div>
         {open_ && <div style={{ padding: '4px 0 4px 24px', fontSize: 16.5, lineHeight: 1.55, color: 'var(--text3)', display: 'flex' }}>
           <Editable text={b.body || ''} placeholder="Tomt innhold" onChange={t => updBlock(i, { body: t })} /></div>}</div>);
+      case 'synced': { const src = (data.synced || {})[b.ref] ?? '';
+        return wrap(<div style={{ boxShadow: 'inset 0 0 0 2px #e3b66555', borderRadius: 6, padding: '4px 8px', margin: '4px -8px', position: 'relative' }}>
+          <span style={{ position: 'absolute', top: -9, right: 8, fontSize: 11, background: 'var(--bg)', color: 'var(--yellow-fg)', padding: '0 4px' }}>⟳ Synkronisert{(() => { const n = Object.values(data.pages).reduce((a, p) => a + (p.blocks || []).filter(x => x.type === 'synced' && x.ref === b.ref).length, 0); return n > 1 ? ` · ${n} steder` : ''; })()}</span>
+          <Editable readOnly={locked} text={src} placeholder="Synkronisert innhold – endringer vises overalt" style={{ fontSize: 17, lineHeight: 1.55, color: 'var(--text2)' }}
+            onChange={t => setData(d => ({ ...d, synced: { ...(d.synced || {}), [b.ref]: t }, pages: Object.fromEntries(Object.entries(d.pages).map(([k, p]) => [k, (p.blocks || []).some(x => x.ref === b.ref) ? { ...p, t: Date.now() } : p])) }))} onKeyDown={onBlockKey(i, { ...b, text: src })} />
+        </div>); }
+      case 'button': return wrap(<div style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '6px 0', flexWrap: 'wrap' }}>
+        <button onClick={() => runButton(b, i)} style={{ height: 32, padding: '0 14px', borderRadius: 8, border: 0, background: 'var(--s3)', color: 'var(--text)', font: 'inherit', fontSize: 14.5, fontWeight: 600, cursor: 'pointer', boxShadow: 'inset 0 0 0 1px var(--line2)' }}>{b.text || 'Knapp'}</button>
+        {!locked && <><select value={b.action || 'todo'} onChange={e => updBlock(i, { action: e.target.value })} style={{ height: 28, borderRadius: 6, border: 0, background: 'transparent', color: 'var(--muted)', font: 'inherit', fontSize: 13 }}>
+          <option value="todo">Legg til gjøremål</option><option value="day">Ny dagbokside (underside)</option><option value="template">Ny side fra mal</option><option value="ai">Spør AI om siden</option></select>
+          {b.action === 'template' && <select value={b.tpl || ''} onChange={e => updBlock(i, { tpl: e.target.value })} style={{ height: 28, borderRadius: 6, border: 0, background: 'transparent', color: 'var(--muted)', font: 'inherit', fontSize: 13 }}><option value="">Velg mal …</option>{(data.templates || []).map(t => <option key={t.id} value={t.id}>{t.title}</option>)}</select>}
+          <span onClick={() => { const l = prompt('Tekst på knappen', b.text || ''); if (l != null) updBlock(i, { text: l }); }} style={{ fontSize: 13, color: 'var(--faint)', cursor: 'pointer' }}>Endre tekst</span></>}
+      </div>);
       case 'quote': return wrap(<div style={{ borderLeft: '3px solid var(--text)', padding: '2px 0 2px 14px', margin: '6px 0', fontSize: 17.5, lineHeight: 1.55 }}>{ed({}, 'Sitat')}</div>);
       case 'image': return wrap(<figure style={{ margin: '10px 0' }}>
         {b.url ? <img src={fileUrl(b.url)} alt={b.text || ''} style={{ maxWidth: '100%', borderRadius: 8, display: 'block' }} />
@@ -366,6 +417,8 @@ export default function App() {
   const applyType = (i, t) => {
     setSlash(null); setSlashQ('');
     if (t === 'ai') { setAi(true); return; }
+    if (t === 'synced') { setSyncedPick(i); return; }
+    if (t === 'button') { const id = page.blocks[i].id || uid(); updBlock(i, { type: 'button', id, text: '+ Nytt gjøremål', action: 'todo' }); return; }
     if (t === 'image') { const id = page.blocks[i].id || uid(); updBlock(i, { type: 'image', id }); pickFile('image/*').then(f => f && uploadFile(f).then(r => updBlock(i, { url: r.url })).catch(e => showToast(e.message))); return; }
     const id = page.blocks[i].id || uid(); updBlock(i, { type: t, id }); setFocus(id + '-' + t); setTimeout(() => setFocus(id), 0);
   };
@@ -544,7 +597,7 @@ export default function App() {
   const Settings = <SettingsView wide={wide} data={data} setData={setData} sync={sync} appIcon={appIcon} toast={showToast} prefs={prefs} setPref={setPref} initialTab={settingsTab}
     onImport={({ pages: np, roots }, label) => { setData(d => ({ ...d, pages: { ...d.pages, ...np }, priv: [...roots, ...d.priv] })); addInbox({ a: '↓', who: 'Import', t: `${label.toLowerCase()} · ${Object.keys(np).length} sider`, page: 'Arbeidsområde', id: roots[0] }); showToast(`${label}: ${Object.keys(np).length} sider`); }}
     onRestorePage={(id, pg) => setData(d => ({ ...d, pages: { ...d.pages, [id]: { ...pg, trashed: undefined, t: Date.now(), parent: pg.parent && d.pages[pg.parent] ? pg.parent : null } }, priv: d.priv.includes(id) || pg.parent ? d.priv : [id, ...d.priv] }))}
-    setAppIcon={k => setData(d => ({ ...d, appIcon: k }))} onClose={() => { setSettings(false); setSettingsTab(null); }}
+    setAppIcon={k => { setData(d => ({ ...d, appIcon: k })); setTimeout(() => applyNativeIcon(k, iconRef.current?.innerHTML, true).then(r => r === 'unsupported' && showToast('Enheten støtter ikke bytte av appikon')), 50); }} onClose={() => { setSettings(false); setSettingsTab(null); }}
     onModels={m => setModels(['', ...m])}
     onReset={() => { if (confirm('Tilbakestille alle notater på denne enheten til eksempeldata?')) { setData(d => withIds({ ...d, pages: seedPages(), rows: seedRows(), recent: seedRecent, priv: seedPrivate })); setSettings(false); setScreen('home'); } }} />;
 
@@ -564,10 +617,11 @@ export default function App() {
       [p.private ? 'Fjern privat-merking' : 'Merk som privat (bare lokal AI)', () => { updPage(id, x => ({ ...x, private: !x.private })); showToast(p.private ? 'Ikke lenger privat' : 'Privat · sendes aldri til Gemini eller Claude'); }],
       ['Flytt til …', () => setModal({ type: 'move', id })],
       ['Kopier tekst', () => { navigator.clipboard?.writeText((p.title || '') + '\n\n' + pageText(p)); showToast('Kopiert'); }],
+      ['Send som e-post', () => { location.href = `mailto:?subject=${encodeURIComponent(p.title || 'Notat')}&body=${encodeURIComponent(pageText(p).slice(0, 1800))}`; }],
       ['Eksporter som PDF', () => printPages([p], fileUrl) || showToast('Tillat popup-vinduer for å skrive ut')],
       ['Lagre som mal', () => saveTemplate(id)],
       ['Spør AI om siden', () => { open(id); setAi(true); }],
-      ...(p.db ? [] : [['Flytt til papirkurven', () => deletePage(id)]])
+      ...(p.db || p.shared ? [] : [['Flytt til papirkurven', () => deletePage(id)]])
     ]; };
   const menuBox = { position: 'fixed', zIndex: 45, width: 250, background: 'var(--menu)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', borderRadius: 12, padding: '6px 0', boxShadow: '0 12px 32px rgba(0,0,0,.5)' };
   const menuItems = (id, close) => <>{pageActions(id).map(([l, f]) => <div key={l} className="press" onClick={() => { close(); f(); }} style={{ padding: wide ? '8px 14px' : '13px 16px', fontSize: wide ? 14 : 16, cursor: 'pointer', color: l === 'Flytt til papirkurven' ? 'var(--red-fg)' : 'var(--text)' }}>{l}</div>)}
@@ -591,7 +645,13 @@ export default function App() {
     setModal(null); open(id); showToast('Møtenotat opprettet');
   };
   const Modals = <>
-    {modal?.type === 'share' && <ShareModal page={page} pageId={pageId} server={data.server} toast={showToast} onClose={() => setModal(null)} onLock={() => updPage(pageId, x => ({ ...x, locked: !x.locked }))} />}
+    {syncedPick !== null && <Modal title="Synkronisert blokk" onClose={() => setSyncedPick(null)}>
+      <div style={{ fontSize: 13.5, color: 'var(--muted)', marginBottom: 10 }}>Samme innhold på flere sider. Endrer du det ett sted, endres det overalt.</div>
+      <button style={smallBtn} onClick={() => { const ref = uid(), i = syncedPick; setData(d => ({ ...d, synced: { ...(d.synced || {}), [ref]: page.blocks[i]?.text || '' } })); updBlock(i, { type: 'synced', ref, id: page.blocks[i].id || uid() }); setSyncedPick(null); }}>＋ Ny synkronisert blokk</button>
+      {Object.entries(data.synced || {}).length > 0 && <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--muted)', margin: '16px 0 6px' }}>Eller sett inn en du har fra før</div>}
+      {Object.entries(data.synced || {}).map(([ref, text]) => <div key={ref} className="press" onClick={() => { updBlock(syncedPick, { type: 'synced', ref, id: page.blocks[syncedPick].id || uid() }); setSyncedPick(null); }} style={{ padding: '8px 10px', borderRadius: 6, cursor: 'pointer', fontSize: 14.5, borderTop: '1px solid var(--line)' }}>⟳ {(text || 'Tom').slice(0, 90)}</div>)}
+    </Modal>}
+    {modal?.type === 'share' && <ShareModal page={page} pageId={page.shared ? page.shared.pageId : pageId} sharedFrom={page.shared} server={data.server} toast={showToast} onClose={() => setModal(null)} onLock={() => updPage(pageId, x => ({ ...x, locked: !x.locked }))} />}
     {modal?.type === 'history' && <HistoryModal pageId={pageId} current={page} onClose={() => setModal(null)} onRestore={old => { updPage(pageId, p => ({ ...p, ...old })); setModal(null); showToast('Versjonen er gjenopprettet'); }} />}
     {modal?.type === 'analytics' && <AnalyticsModal page={page} pageId={pageId} onClose={() => setModal(null)} />}
     {modal?.type === 'meeting' && <MeetingModal onClose={() => setModal(null)} toast={showToast} onDone={meetingDone} ask={p => askText(p)} />}

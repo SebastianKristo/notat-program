@@ -86,3 +86,11 @@ CREATE TABLE IF NOT EXISTS api_tokens (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_used TIMESTAMPTZ
 );
+CREATE TABLE IF NOT EXISTS shares (
+  owner_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  page_id TEXT NOT NULL,
+  member_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role TEXT NOT NULL DEFAULT 'edit',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (owner_id, page_id, member_id)
+);

@@ -56,13 +56,14 @@ export function useSync(data, setData) {
     timer.current = setTimeout(() => push(data, auth.version || 0), 1200);
   }, [data]);
 
-  const login = async (email, password, register) => {
-    const r = await fetch(base + (register ? '/api/register' : '/api/login'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
+  const login = async (email, password, register, code) => {
+    const r = await fetch(base + (register ? '/api/register' : '/api/login'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password, code }) });
     const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(j.error || 'Fikk ikke kontakt med serveren');
+    if (!r.ok) throw Object.assign(new Error(j.error || 'Fikk ikke kontakt med serveren'), { needTotp: !!j.need_totp });
     dirty.current = true; setAuth({ token: j.token, email, version: 0 });
   };
+  const useToken = (token, email) => { dirty.current = true; setAuth({ token, email, version: 0 }); };
   const logout = () => { api('/api/logout', { method: 'POST' }).catch(() => {}); setAuth({}); setStatus('lokal'); };
 
-  return { auth, status, login, logout, authHeader: auth.token ? { Authorization: 'Bearer ' + auth.token } : {} };
+  return { auth, status, login, logout, useToken, authHeader: auth.token ? { Authorization: 'Bearer ' + auth.token } : {} };
 }

@@ -37,3 +37,9 @@ export async function uploadFile(file, max) {
   return { url, name: f.name, mime: f.type, size: f.size };
 }
 export const pickFile = accept => new Promise(ok => { const i = document.createElement('input'); i.type = 'file'; i.accept = accept || ''; i.onchange = () => ok(i.files[0] || null); i.click(); });
+
+// Åpner en adresse i systemets nettleser (Capacitor-appene) eller i en ny fane/vindu
+export async function openExternal(url) {
+  if (window.Capacitor?.isNativePlatform?.()) { const { Browser } = await import('@capacitor/browser'); return Browser.open({ url }); }
+  window.open(url, '_blank');
+}

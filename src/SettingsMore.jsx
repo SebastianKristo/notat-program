@@ -33,6 +33,13 @@ function Security({ ctx }) {
           <button style={btn('var(--text)', 'var(--bg)')} onClick={() => api('/api/security/totp/enable', { method: 'POST', body: JSON.stringify({ code }) }).then(() => { setSetup(null); setCode(''); load(); toast('Tofaktor er slått på'); }).catch(e => toast(e.message))}>Bekreft</button></div>
       </div>}
     </Group>
+    {ctx.admin && <Group title="Single sign-on (OIDC)">
+      <div style={{ fontSize: 13, color: 'var(--muted)', margin: '4px 0 8px', lineHeight: 1.5 }}>Fungerer med Authentik, Keycloak, Google m.fl. Opprett en OAuth2/OpenID-klient med redirect-adressen <code>{ctx.base}/api/sso/callback</code>.</div>
+      {[['oidc_name', 'Navn på knappen', 'Authentik'], ['oidc_issuer', 'Issuer-adresse', 'https://auth.kristo.no/application/o/marg/'], ['oidc_client_id', 'Client ID', ''], ['oidc_client_secret', 'Client secret', ctx.s?.oidc_client_secret_set ? '••••••••  (lagret)' : ''], ['public_url', 'Offentlig adresse til Marg', ctx.base]].map(([k, l, ph]) =>
+        <Row key={k} label={l}><input type={k.includes('secret') ? 'password' : 'text'} value={ctx.v(k)} placeholder={ph} onChange={e => ctx.set(k, e.target.value)} style={{ ...field, ...(k === 'oidc_name' ? {} : mono), maxWidth: 280 }} /></Row>)}
+      <Row label="Lag konto automatisk ved første innlogging" desc="Av: bare personer som allerede er lagt til kan logge inn med SSO"><ctx.Toggle on={ctx.v('oidc_auto_create') === 'true'} onChange={x => ctx.set('oidc_auto_create', String(x))} /></Row>
+      {ctx.dirty(['oidc_', 'public_url']) && <button style={btn('var(--text)', 'var(--bg)')} onClick={() => ctx.save(['oidc_', 'public_url'])}>Lagre</button>}
+    </Group>}
     <Group title="Aktive enheter">
       {sec.sessions.map(x => <Row key={x.id} label={<>{agentName(x.agent)}{x.current && <span style={{ fontSize: 11, marginLeft: 8, padding: '1px 6px', borderRadius: 4, background: 'var(--green-bg)', color: 'var(--green-fg)' }}>Denne enheten</span>}</>} desc={`Logget inn ${fmt(x.created)} · sist aktiv ${fmt(x.seen)}`} />)}
       <Row label="Logg ut fra alle andre enheter" desc="Du blir logget ut overalt bortsett fra her"><button style={btn('var(--red-bg)', 'var(--red-fg)')} onClick={() => api('/api/security/logout-others', { method: 'POST' }).then(r => { toast(`Logget ut fra ${r.count} enheter`); load(); })}>Logg ut</button></Row>
@@ -128,6 +135,17 @@ function Mcp({ ctx }) {
   </>;
 }
 
+function NotionApi({ ctx }) {
+  const { Row, Group, btn, field, toast, onImport, sync, api } = ctx;
+  const [token, setToken] = useState(''), [busy, setBusy] = useState(false);
+  if (!sync.auth.token) return null;
+  return <Group title="Notion API">
+    <Row label="Integrasjonsnøkkel" desc={<>Lag en intern integrasjon på notion.so/my-integrations, og del sidene med den (··· → Tilkoblinger). Bilder lagres på serveren din.</>}>
+      <input type="password" value={token} onChange={e => setToken(e.target.value)} placeholder="ntn_… / secret_…" style={{ ...field, width: 180 }} />
+      <button style={btn()} disabled={busy || !token} onClick={async () => { setBusy(true); try { const r = await api('/api/import/notion', { method: 'POST', body: JSON.stringify({ token }) }); onImport(r, 'Importert fra Notion API'); setToken(''); } catch (e) { toast(e.message); } setBusy(false); }}>{busy ? 'Henter …' : 'Importer'}</button></Row>
+  </Group>;
+}
+
 function ImportExport({ ctx }) {
   const { Row, Group, btn, toast, data, onImport, setData } = ctx;
   const [busy, setBusy] = useState('');
@@ -135,6 +153,7 @@ function ImportExport({ ctx }) {
   const pickMany = (opts = {}) => new Promise(ok => { const i = document.createElement('input'); i.type = 'file'; i.multiple = true; Object.assign(i, opts); if (opts.dir) i.webkitdirectory = true; i.onchange = () => ok([...i.files]); i.click(); });
   const live = Object.entries(data.pages).filter(([, p]) => !p.trashed && !p.db);
   return <>
+    <NotionApi ctx={ctx} />
     <Group title="Importer">
       <Row label="Notion" desc="Eksporter fra Notion som «Markdown & CSV» (ZIP) og velg filen her"><button style={btn()} disabled={!!busy} onClick={() => run('notion', async () => { const f = await pickFile('.zip'); if (!f) return; const files = await filesFromZip(f); if (!files.length) throw new Error('Fant ingen Markdown-filer i ZIP-filen'); const r = importMarkdownFiles(files, { stripNotionIds: true }); onImport(r, 'Importert fra Notion'); })}>{busy === 'notion' ? 'Importerer …' : 'Importer ZIP'}</button></Row>
       <Row label="Obsidian-hvelv" desc="Velg mappen med .md-filer. Mapper blir sider med undersider"><button style={btn()} disabled={!!busy} onClick={() => run('obs', async () => { const fs = (await pickMany({ dir: true })).filter(f => /\.md$/i.test(f.name)); if (!fs.length) return; const files = await Promise.all(fs.map(async f => ({ path: f.webkitRelativePath || f.name, text: await f.text() }))); onImport(importMarkdownFiles(files), 'Importert fra Obsidian'); })}>{busy === 'obs' ? 'Importerer …' : 'Velg mappe'}</button></Row>

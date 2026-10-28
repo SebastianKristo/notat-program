@@ -341,5 +341,5 @@ export function createFeatures({ db, send, readJson, audit, isAdmin, hash, verif
     }]
   ];
 
-  return { routes, param, tokenAuth, fireWebhooks, publicRoutes: [] };
+  return { routes, param, tokenAuth, fireWebhooks, saveWs, workspace, FILES };
 }

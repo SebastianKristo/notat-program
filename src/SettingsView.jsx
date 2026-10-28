@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { AppIcon, APP_ICONS } from './appicons.jsx';
 import { Icon } from './icons.jsx';
 import { moreSections } from './SettingsMore.jsx';
-import { uploadFile } from './api.js';
+import { uploadFile, openExternal } from './api.js';
 
 const field = { width: '100%', boxSizing: 'border-box', height: 38, borderRadius: 8, border: 0, background: 'var(--s3)', color: 'var(--text)', padding: '0 11px', font: 'inherit', fontSize: 14 };
 const mono = { fontFamily: 'ui-monospace,SFMono-Regular,monospace' };
@@ -34,6 +34,23 @@ export default function SettingsView({ wide, data, setData, sync, appIcon, setAp
   const loggedIn = !!sync.auth.token;
   const [tab, setTab] = useState(initialTab || (wide ? 'konto' : null));
   const [pagePick, setPagePick] = useState(null);
+  const [sso, setSso] = useState(null);
+  useEffect(() => { // bare svaret for gjeldende adresse teller
+    if (sync.auth.token) return; let live = true; setSso(null);
+    const t = setTimeout(() => fetch(base + '/api/sso/config').then(r => r.json()).then(x => live && setSso(x)).catch(() => {}), 300);
+    return () => { live = false; clearTimeout(t); };
+  }, [base, sync.auth.token]);
+  const ssoLogin = async () => {
+    const state = Array.from(crypto.getRandomValues(new Uint8Array(18)), b => b.toString(16).padStart(2, '0')).join('');
+    await openExternal(`${base}/api/sso/start?state=${state}`);
+    toast('Fullfør innloggingen i nettleseren');
+    for (let i = 0; i < 120; i++) {
+      await new Promise(r => setTimeout(r, 1500));
+      const r = await fetch(`${base}/api/sso/poll?state=${state}`).catch(() => null); if (!r) continue;
+      if (r.status === 200) { const j = await r.json(); sync.useToken(j.token, j.email); toast('Logget inn som ' + j.email); return; }
+      if (r.status !== 202) { const j = await r.json().catch(() => ({})); toast(j.error || 'Innloggingen feilet'); return; }
+    }
+  };
   const [query, setQuery] = useState('');
   const [s, setS] = useState(null);          // serverinnstillinger
   const [edit, setEdit] = useState({});      // ulagrede endringer
@@ -107,15 +124,17 @@ export default function SettingsView({ wide, data, setData, sync, appIcon, setAp
       </Group> : <Group title="Logg inn">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 360, paddingTop: 8 }}>
           {['email', 'password'].map(k => <input key={k} type={k} placeholder={k === 'email' ? 'E-post' : 'Passord'} value={cred[k]} onChange={e => setCred(c => ({ ...c, [k]: e.target.value }))} style={field} />)}
+          {cred.totp && <input value={cred.code || ''} onChange={e => setCred(c => ({ ...c, code: e.target.value }))} placeholder="Kode fra autentiseringsappen" inputMode="numeric" autoFocus style={{ ...field, ...mono }} />}
           {cred.err && <div style={{ color: 'var(--red-fg)', fontSize: 13.5 }}>{cred.err}</div>}
           <div style={{ display: 'flex', gap: 8 }}>{[['Logg inn', false], ['Opprett konto', true]].map(([l, reg]) => <button key={l} style={btn(reg ? 'var(--s3)' : 'var(--text)', reg ? 'var(--text)' : 'var(--bg)')} onClick={async () => {
-            try { await sync.login(cred.email, cred.password, reg); setCred({ email: '', password: '', err: '' }); toast('Koblet til ' + base.replace(/^https?:\/\//, '')); }
-            catch (e) { setCred(c => ({ ...c, err: e.message === 'Failed to fetch' ? 'Fikk ikke kontakt med serveren' : e.message })); } }}>{l}</button>)}</div>
+            try { await sync.login(cred.email, cred.password, reg, cred.code); setCred({ email: '', password: '', err: '' }); toast('Koblet til ' + base.replace(/^https?:\/\//, '')); }
+            catch (e) { setCred(c => ({ ...c, totp: c.totp || e.needTotp, err: e.message === 'Failed to fetch' ? 'Fikk ikke kontakt med serveren' : e.message })); } }}>{l}</button>)}</div>
+          {sso?.enabled && <button style={{ ...btn(), width: 'fit-content' }} onClick={ssoLogin}>🔐 Logg inn med {sso.name}</button>}
           <div style={{ fontSize: 12.5, color: 'var(--faint)' }}>Første konto på en ny server blir administrator.</div>
         </div></Group>}
     </> },
     { id: 'utseende', group: 'Innstillinger', label: 'Utseende', icon: '🎨', words: 'appikon ikon krystall ark marg tema lys mørk kontrast skrift bredde', render: () => <Group title="Utseende">
-      <Row label="Appikon" desc="Vises i appen og som favicon. Krystall er standard.">
+      <Row label="Appikon" desc="Vises på hjemskjermen (iPhone, iPad, Android), i Dock på Mac og som favicon. Krystall er standard.">
         <div style={{ display: 'flex', gap: 12 }}>{Object.entries(APP_ICONS).map(([k, name]) => <div key={k} onClick={() => { setAppIcon(k); toast('Appikon endret til ' + name); }} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
           <span style={{ borderRadius: 14, padding: 3, boxShadow: `0 0 0 2px ${appIcon === k ? 'var(--text)' : 'transparent'}` }}><AppIcon variant={k} size={48} /></span>
           <span style={{ fontSize: 12, color: appIcon === k ? 'var(--text)' : 'var(--muted)' }}>{name}</span></div>)}</div>
@@ -221,9 +240,9 @@ export default function SettingsView({ wide, data, setData, sync, appIcon, setAp
 
   const guardLogin = el => !loggedIn ? needLogin : el;
   const apiCtx = (p, o = {}) => api(p, o);
-  sections.splice(1, 0, ...moreSections({ Row, Group, Toggle, Select, prefs, setPref, guardLogin, guard, v, set, save, dirty, btn, field, mono, data, setData, toast, api: apiCtx, admin, sync, base, onImport })
+  sections.splice(1, 0, ...moreSections({ s, Row, Group, Toggle, Select, prefs, setPref, guardLogin, guard, v, set, save, dirty, btn, field, mono, data, setData, toast, api: apiCtx, admin, sync, base, onImport })
     .filter(x => x.group === 'Konto'));
-  const more = moreSections({ Row, Group, Toggle, Select, prefs, setPref, guardLogin, guard, v, set, save, dirty, btn, field, mono, data, setData, toast, api: apiCtx, admin, sync, base, onImport }).filter(x => x.group !== 'Konto');
+  const more = moreSections({ s, Row, Group, Toggle, Select, prefs, setPref, guardLogin, guard, v, set, save, dirty, btn, field, mono, data, setData, toast, api: apiCtx, admin, sync, base, onImport }).filter(x => x.group !== 'Konto');
   for (const m of more) { const i = sections.findLastIndex(x => x.group === m.group); sections.splice(i < 0 ? sections.length : i + 1, 0, m); }
   const ql = query.trim().toLowerCase();
   const shown = sections.filter(x => !ql || (x.label + ' ' + x.words).toLowerCase().includes(ql));

@@ -57,5 +57,6 @@ export const BLOCK_TYPES = [
   ['li', 'Punktliste', '•', 'Standardblokker', 'liste kulepunkt'], ['toggle', 'Utvidbar liste', '▸', 'Standardblokker', 'toggle skjul'],
   ['quote', 'Sitat', '“', 'Standardblokker', 'quote'], ['callout', 'Callout', '💡', 'Standardblokker', 'merknad boks'], ['divider', 'Skillelinje', '—', 'Standardblokker', 'linje hr'],
   ['image', 'Bilde', '🖼️', 'Media', 'bilde foto opplasting'],
+  ['synced', 'Synkronisert blokk', '⟳', 'Avanserte blokker', 'synk gjenbruk kopi'], ['button', 'Knapp', '▭', 'Avanserte blokker', 'knapp handling mal'],
   ['math', 'Formel', '∑', 'Avanserte blokker', 'matte ligning latex'], ['ai', 'Spør AI', '✦', 'Avanserte blokker', 'ai assistent']
 ];
