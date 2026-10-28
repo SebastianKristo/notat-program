@@ -106,7 +106,12 @@ const routes = {
 
   // Strømmer ren tekst tilbake fra Ollama.
   'POST /api/ai': async (req, res, uid) => {
-    const { model = 'llama3.1:8b', prompt = '', context = {} } = await readJson(req);
+    let { model = 'llama3.1:8b', prompt = '', context = {} } = await readJson(req);
+    // Delt Ollama (f.eks. på en Mac mini) har ikke nødvendigvis modellen appen ber om.
+    try {
+      const names = ((await (await fetch(OLLAMA + '/api/tags', { signal: AbortSignal.timeout(3000) })).json()).models || []).map(m => m.name);
+      if (names.length && !names.includes(model)) model = names.includes(process.env.OLLAMA_DEFAULT_MODEL) ? process.env.OLLAMA_DEFAULT_MODEL : names.find(n => !/embed/.test(n)) || names[0];
+    } catch {}
     const sys = 'Du er Marg, en hjelpsom assistent i en notatapp. Svar kort og på norsk.';
     const ctx = context.text ? `\n\nSiden brukeren har åpen:\n"""\n${String(context.text).slice(0, 12000)}\n"""` : '';
     let up;

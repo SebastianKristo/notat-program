@@ -2,7 +2,8 @@
 # Marg – Proxmox VE helper script
 # Kjør på Proxmox-verten (som root):
 #   bash -c "$(curl -fsSL https://raw.githubusercontent.com/SebastianKristo/notat-program/HEAD/scripts/proxmox-install.sh)"
-# Lager en Debian 12 LXC-container med Docker og starter Marg-backenden (Caddy, API, Postgres, Ollama, backup).
+# Lager en Debian 12 LXC-container med Docker og starter Marg-backenden (Caddy, API, Postgres, backup).
+# AI går mot en eksisterende Ollama på nettverket (f.eks. en Mac mini).
 # Alle valg kan settes med miljøvariabler for å hoppe over spørsmålene, f.eks. CTID=120 DOMAIN=notes.kristo.no.
 set -euo pipefail
 
@@ -33,15 +34,17 @@ command -v pct >/dev/null || die "Fant ikke 'pct'. Dette skriptet må kjøres p�
 
 ask CTID       "Container-ID"                        "$(pvesh get /cluster/nextid)"
 ask CT_NAME    "Vertsnavn"                           "marg"
-ask DISK_GB    "Disk (GB, Ollama-modeller tar plass)" "64"
-ask RAM_MB     "Minne (MB)"                          "16384"
-ask CORES      "CPU-kjerner"                         "4"
+ask DISK_GB    "Disk (GB)"                           "16"
+ask RAM_MB     "Minne (MB)"                          "4096"
+ask CORES      "CPU-kjerner"                         "2"
 ask STORAGE    "Lagring for rootfs"                  "local-lvm"
 ask BRIDGE     "Nettverksbro"                        "vmbr0"
 ask IP         "IP (dhcp eller f.eks. 192.168.1.50/24)" "dhcp"
 [[ "$IP" != "dhcp" ]] && ask GATEWAY "Gateway" "$(ip route | awk '/default/ {print $3; exit}')"
 ask DOMAIN     "Domene for Marg (DNS må peke hit, port 80/443)" "notes.kristo.no"
-ask MODELS     "Ollama-modeller"                     "llama3.1:8b nomic-embed-text"
+ask OLLAMA_URL "Ollama-adresse (Mac mini)"           "http://mac-mini.local:11434"
+ask DEFAULT_MODEL "Standardmodell (tom = første tilgjengelige)" "-"
+[[ "$DEFAULT_MODEL" == "-" ]] && DEFAULT_MODEL=""
 ask ALLOW_SIGNUP "Tillat registrering for alle (true/false)" "false"
 ask REPO_URL   "Git-repo"                            "https://github.com/SebastianKristo/notat-program.git"
 ask BRANCH     "Branch (tom = standard)"            "-"
@@ -83,7 +86,7 @@ CLONE_URL="$REPO_URL"
 [[ -n "$GITHUB_TOKEN" ]] && CLONE_URL="${REPO_URL/https:\/\//https://x-access-token:${GITHUB_TOKEN}@}"
 
 msg "Installerer Docker og Marg i containeren (dette tar noen minutter) …"
-pct exec "$CTID" -- env CLONE_URL="$CLONE_URL" BRANCH="$BRANCH" DOMAIN="$DOMAIN" PG_PASS="$PG_PASS" MODELS="$MODELS" ALLOW_SIGNUP="$ALLOW_SIGNUP" bash -euo pipefail -c '
+pct exec "$CTID" -- env CLONE_URL="$CLONE_URL" BRANCH="$BRANCH" DOMAIN="$DOMAIN" PG_PASS="$PG_PASS" OLLAMA_URL="$OLLAMA_URL" DEFAULT_MODEL="$DEFAULT_MODEL" ALLOW_SIGNUP="$ALLOW_SIGNUP" bash -euo pipefail -c '
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq
   apt-get install -y -qq ca-certificates curl git >/dev/null
@@ -97,7 +100,8 @@ pct exec "$CTID" -- env CLONE_URL="$CLONE_URL" BRANCH="$BRANCH" DOMAIN="$DOMAIN"
 DOMAIN=$DOMAIN
 POSTGRES_PASSWORD=$PG_PASS
 ALLOW_SIGNUP=$ALLOW_SIGNUP
-OLLAMA_MODELS=$MODELS
+OLLAMA_URL=$OLLAMA_URL
+OLLAMA_DEFAULT_MODEL=$DEFAULT_MODEL
 ENV
   chmod 600 server/.env
   cd server && docker compose up -d --build >/dev/null 2>&1
@@ -112,6 +116,9 @@ UPD
 '
 ok "Marg kjører"
 
+if pct exec "$CTID" -- curl -fsS -m 5 "$OLLAMA_URL/api/tags" >/dev/null 2>&1; then ok "Ollama svarer på $OLLAMA_URL"
+else echo -e " ${YW}!${CL} Fikk ikke kontakt med Ollama på $OLLAMA_URL fra containeren. Se neste steg 2."; fi
+
 CT_IP=$(pct exec "$CTID" -- hostname -I | awk '{print $1}')
 cat <<DONE
 
@@ -124,7 +131,9 @@ cat <<DONE
 
  ${YW}Neste steg:${CL}
    1. Pek DNS for $DOMAIN mot ruteren din og videresend port 80 og 443 til $CT_IP.
-   2. Ollama laster ned modellene i bakgrunnen ($MODELS) – det kan ta en stund.
+   2. Ollama på Mac-en må lytte på nettverket. Kjør på Mac-en:
+        launchctl setenv OLLAMA_HOST 0.0.0.0   # og start Ollama-appen på nytt
+      Endre senere i /opt/marg/server/.env (OLLAMA_URL) og kjør marg-update.
    3. Åpne Marg-appen → trykk M-logoen → serveradresse https://$DOMAIN → Opprett konto.
 
 DONE

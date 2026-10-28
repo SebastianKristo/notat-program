@@ -16,7 +16,7 @@ GitHub Actions (`.github/workflows/release.yml`) bygger APK, IPA og DMG på hver
 
 ## Backend (Docker Compose)
 
-`server/` inneholder API (Node + Postgres/pgvector), Ollama for AI, Caddy for HTTPS og nattlig `pg_dump`-backup.
+`server/` inneholder API (Node + Postgres/pgvector), Caddy for HTTPS og nattlig `pg_dump`-backup. AI går mot en Ollama du allerede har (f.eks. på en Mac mini) via `OLLAMA_URL` i `.env`. Vil du heller kjøre Ollama i Docker: `docker compose --profile ollama up -d`.
 
 ```bash
 npm install && npm run build      # web-klienten serveres også av Caddy fra ../dist
@@ -26,7 +26,7 @@ docker compose up -d --build
 ```
 
 - Pek DNS for `DOMAIN` mot serveren; Caddy henter TLS-sertifikat automatisk.
-- `ollama-pull` laster ned modellene i `OLLAMA_MODELS` ved oppstart.
+- Ollama på Mac-en må lytte på nettverket: `launchctl setenv OLLAMA_HOST 0.0.0.0` og start Ollama på nytt. Appen viser modellene som finnes der.
 - Første bruker kan registrere seg fra appen (M-logoen → Opprett konto). Deretter er registrering stengt, med mindre `ALLOW_SIGNUP=true`.
 - Endepunkter: `/api/health`, `/api/register`, `/api/login`, `/api/logout`, `/api/workspace` (GET/PUT med versjonskontroll), `/api/history`, `/api/models`, `/api/ai` (strømmer fra Ollama).
 

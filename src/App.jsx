@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { C, ST, ORDER, MODELS, EVENTS, INBOX, BLOCK_TYPES, seedPages, seedRows, seedRecent, seedPrivate } from './data.js';
+import { C, ST, ORDER, MODELS as DEFAULT_MODELS, EVENTS, INBOX, BLOCK_TYPES, seedPages, seedRows, seedRecent, seedPrivate } from './data.js';
 import { Icon, Logo } from './icons.jsx';
 import { useSync } from './sync.js';
 
@@ -61,6 +61,12 @@ export default function App() {
   const [settings, setSettings] = useState(false);
   const tt = useRef(); const msgRef = useRef();
   const sync = useSync(data, setData);
+  const [MODELS, setModels] = useState(DEFAULT_MODELS);
+  useEffect(() => {
+    if (!sync.auth.token) return;
+    fetch(data.server.replace(/\/$/, '') + '/api/models', { headers: sync.authHeader }).then(r => r.ok ? r.json() : null)
+      .then(m => { const chat = (m || []).filter(n => !/embed/.test(n)); if (chat.length) { setModels(chat); setModel(0); } }).catch(() => {});
+  }, [sync.auth.token, data.server]);
   const [cred, setCred] = useState({ email: '', password: '', err: '' });
 
   useEffect(() => { try { localStorage.setItem(KEY, JSON.stringify(data)); } catch { /* full */ } }, [data]);
@@ -266,7 +272,7 @@ export default function App() {
       {!wide && <div style={{ display: 'flex', justifyContent: 'center', padding: '8px 0 0' }}><span style={{ width: 38, height: 5, borderRadius: 3, background: '#444' }} /></div>}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 18px 8px' }}>
         <span onClick={() => setAi(false)} style={{ fontSize: 16, cursor: 'pointer' }}>Lukk</span>
-        <span onClick={() => setModel((model + 1) % MODELS.length)} style={{ display: 'flex', gap: 6, fontSize: 14, fontWeight: 600, padding: '6px 12px', borderRadius: 16, background: '#2c2c2c', cursor: 'pointer' }}>{MODELS[model]} <span style={{ color: '#8f8e8a', fontWeight: 400 }}>· lokal ⌄</span></span>
+        <span onClick={() => setModel((model + 1) % MODELS.length)} style={{ display: 'flex', gap: 6, fontSize: 14, fontWeight: 600, padding: '6px 12px', borderRadius: 16, background: '#2c2c2c', cursor: 'pointer' }}>{MODELS[model % MODELS.length]} <span style={{ color: '#8f8e8a', fontWeight: 400 }}>· server ⌄</span></span>
         <span onClick={() => setMsgs([])} style={{ fontSize: 16, color: '#8f8e8a', cursor: 'pointer' }}>Ny</span>
       </div>
       <div ref={msgRef} style={{ flex: '1 1 0', overflow: 'auto', padding: '10px 18px', display: 'flex', flexDirection: 'column', gap: 14 }}>
